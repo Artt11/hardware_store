@@ -1,115 +1,26 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+'use client';
+
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Header } from './components/layout/Header';
-import { ProductCard } from './components/product/ProductCard';
+import { Footer } from './components/layout/Footer';
+import { Catalog } from './components/product/Catalog';
 import { FacetedFilter } from './components/product/FacetedFilter';
 import { CartDrawer, CartItem } from './components/cart/CartDrawer';
 import { ProductDetailModal } from './components/product/ProductDetailModal';
 import { WishlistProvider } from './context/WishlistContext';
-import { AuthProvider } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { LanguageProvider, useLanguage } from './context/LanguageContext';
 import { AuthModal } from './components/auth/AuthModal';
 import { UserDashboard } from './components/profile/UserDashboard';
+import { getHighResFallbackImage } from './components/product/ProductCard';
 import { Product, FilterState, FacetOption } from './types/product';
-import { Sparkles, ArrowUpDown, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
+import { API_BASE_URL, getEffectiveUnitPrice } from './config/api';
 
-const API_BASE_URL = 'http://localhost:8000/api/v1';
+const BATCH_LIMIT = 36;
+const CART_STORAGE_KEY = 'suro_cart_v1';
 
-// Real seed fallback items from "Products Սուրո.xlsx" in case backend server is offline
-const FALLBACK_SURO_CATALOG: Product[] = [
-  {
-    id: '253b27e4-49d0-5234-a359-18480c94f894',
-    sku: '00001',
-    name: 'Պտուտակ գիպսոկարդոնի մետաղի 3,5x25 (1000 հատ)',
-    slug: 'product-00001',
-    unit_of_measure: 'տուփ',
-    category: 'Uncategorized',
-    retail_price: 1000,
-    wholesale_price: 0,
-    barcode: '13515324',
-    vat_applicable: true,
-    discount_percent: 0,
-    description: 'Պտուտակ գիպսոկարդոնի մետաղի 3,5x25 (1000 հատ)',
-    image_url: null,
-    is_active: true,
-    brand: 'Սուրո',
-    price: 1000,
-    currency: 'AMD',
-    inStock: true,
-    stockQuantity: 25,
-    ratingAverage: 4.9,
-    ratingCount: 24,
-    imageUrl: 'https://images.unsplash.com/photo-1504148455328-c376907d081c?auto=format&fit=crop&w=800&q=80',
-    thumbnailUrl: 'https://images.unsplash.com/photo-1504148455328-c376907d081c?auto=format&fit=crop&w=160&q=80',
-    shortDescription: 'Կոդ: 00001 • Չափման միավոր: տուփ • Գծիկավոր կոդ: 13515324',
-    specifications: {
-      unit: 'տուփ',
-      barcode: '13515324',
-      atgaa_code: '3926',
-    },
-    isNew: true,
-  },
-  {
-    id: 'a012d9e0-1b2c-5d3e-8f4a-112233445502',
-    sku: '00002',
-    name: 'Պտուտակ գիպսոկարդոնի մետաղի 3,5x35 (1000 հատ)',
-    slug: 'product-00002',
-    unit_of_measure: 'տուփ',
-    category: 'Uncategorized',
-    retail_price: 1500,
-    wholesale_price: 0,
-    barcode: '35512562',
-    vat_applicable: true,
-    discount_percent: 0,
-    description: 'Պտուտակ գիպսոկարդոնի մետաղի 3,5x35 (1000 հատ)',
-    image_url: null,
-    is_active: true,
-    brand: 'Սուրո',
-    price: 1500,
-    currency: 'AMD',
-    inStock: true,
-    stockQuantity: 25,
-    ratingAverage: 4.8,
-    ratingCount: 19,
-    imageUrl: 'https://images.unsplash.com/photo-1581244277943-fe4a9c777189?auto=format&fit=crop&w=800&q=80',
-    thumbnailUrl: 'https://images.unsplash.com/photo-1581244277943-fe4a9c777189?auto=format&fit=crop&w=160&q=80',
-    shortDescription: 'Կոդ: 00002 • Չափման միավոր: տուփ • Գծիկավոր կոդ: 35512562',
-    specifications: {
-      unit: 'տուփ',
-      barcode: '35512562',
-      atgaa_code: '7318',
-    },
-  },
-  {
-    id: 'b023e0f1-2c3d-5e4f-9a5b-223344556603',
-    sku: '00003',
-    name: 'Սիլիկոնե հերմետիկ սպիտակ 280մլ',
-    slug: 'product-00003',
-    unit_of_measure: 'հատ',
-    category: 'Uncategorized',
-    retail_price: 1200,
-    wholesale_price: 0,
-    barcode: '2000000003',
-    vat_applicable: true,
-    discount_percent: 0,
-    description: 'Սիլիկոնե հերմետիկ սպիտակ 280մլ',
-    image_url: null,
-    is_active: true,
-    brand: 'Սուրո',
-    price: 1200,
-    currency: 'AMD',
-    inStock: true,
-    stockQuantity: 25,
-    ratingAverage: 4.85,
-    ratingCount: 15,
-    imageUrl: 'https://images.unsplash.com/photo-1586864387967-d02ef85d93e8?auto=format&fit=crop&w=800&q=80',
-    thumbnailUrl: 'https://images.unsplash.com/photo-1586864387967-d02ef85d93e8?auto=format&fit=crop&w=160&q=80',
-    shortDescription: 'Կոդ: 00003 • Չափման միավոր: հատ',
-    specifications: {
-      unit: 'հատ',
-    },
-  },
-];
-
-function mapApiItemToProduct(item: any): Product {
+export function mapApiItemToProduct(item: any): Product {
+  const sku = String(item.sku || '');
   const retailPrice =
     typeof item.retail_price === 'number'
       ? item.retail_price
@@ -120,12 +31,12 @@ function mapApiItemToProduct(item: any): Product {
     typeof item.wholesale_price === 'number' ? item.wholesale_price : 0;
   const unit = item.unit_of_measure || 'հատ';
   const category = item.category || item.category_name || 'Uncategorized';
-  const isActive = item.is_active !== undefined ? Boolean(item.is_active) : Boolean(item.in_stock ?? true);
-  const fallbackImg =
-    item.primary_image_url ||
-    item.image_url ||
-    item.imageUrl ||
-    'https://images.unsplash.com/photo-1504148455328-c376907d081c?auto=format&fit=crop&w=800&q=80';
+  const isActive =
+    item.is_active !== undefined ? Boolean(item.is_active) : Boolean(item.in_stock ?? true);
+
+  const fallbackImg = getHighResFallbackImage(sku);
+  const resolvedImage =
+    item.primary_image_url || item.image_url || item.imageUrl || fallbackImg;
 
   const specs: Record<string, string> = {
     ...(item.key_specs || item.specifications || {}),
@@ -137,9 +48,9 @@ function mapApiItemToProduct(item: any): Product {
 
   return {
     id: String(item.id),
-    sku: String(item.sku || ''),
+    sku,
     name: String(item.name || ''),
-    slug: String(item.slug || `product-${item.sku}`),
+    slug: String(item.slug || `product-${sku}`),
     unit_of_measure: unit,
     category,
     retail_price: retailPrice,
@@ -148,7 +59,7 @@ function mapApiItemToProduct(item: any): Product {
     vat_applicable: item.vat_applicable !== undefined ? Boolean(item.vat_applicable) : true,
     discount_percent: Number(item.discount_percent || 0),
     description: item.description || null,
-    image_url: item.image_url || null,
+    image_url: resolvedImage,
     is_active: isActive,
     brand: item.brand_name || item.brand || 'Սուրո',
     price: retailPrice,
@@ -158,370 +69,444 @@ function mapApiItemToProduct(item: any): Product {
     stockQuantity: Number(item.stock_quantity ?? 25),
     ratingAverage: Number(item.rating_average ?? 4.8),
     ratingCount: Number(item.rating_count ?? 12),
-    imageUrl: fallbackImg,
-    thumbnailUrl: item.thumbnail_url || fallbackImg,
+    imageUrl: resolvedImage,
+    thumbnailUrl: item.thumbnail_url || resolvedImage,
     shortDescription:
       item.description ||
-      `Կոդ: ${item.sku} • Չափման միավոր: ${unit}${item.barcode ? ` • Գծիկավոր կոդ: ${item.barcode}` : ''}`,
+      `Կոդ: ${sku} • Չափման միավոր: ${unit}${
+        item.barcode ? ` • Գծիկավոր կոդ: ${item.barcode}` : ''
+      }`,
     specifications: specs,
   };
 }
 
 export const AppContent: React.FC = () => {
+  const { user, openAuthModal, isAuthModalOpen } = useAuth();
+  const { t } = useLanguage();
+
   const [products, setProducts] = useState<Product[]>([]);
   const [totalProducts, setTotalProducts] = useState<number>(0);
-  const [page, setPage] = useState<number>(1);
-  const [pageSize] = useState<number>(24);
-  const [totalPages, setTotalPages] = useState<number>(1);
+  const [offset, setOffset] = useState<number>(0);
+  const [hasMore, setHasMore] = useState<boolean>(true);
   const [sortBy, setSortBy] = useState<string>('sku');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
 
   const [apiCategories, setApiCategories] = useState<FacetOption[]>([]);
   const [apiUnits, setApiUnits] = useState<FacetOption[]>([]);
+  const localCatalogCacheRef = useRef<Product[] | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
   const [isCartOpen, setIsCartOpen] = useState(false);
-  const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [isDashboardOpen, setIsDashboardOpen] = useState(false);
 
-  // Faceted Filter State
+  // BUG-05 Fix: Initialize cartItems from localStorage so cart survives page reloads
+  const [cartItems, setCartItems] = useState<CartItem[]>(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const saved = window.localStorage.getItem(CART_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
+      }
+    } catch {
+      // Ignore malformed storage
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cartItems));
+    } catch {
+      // Ignore quota errors
+    }
+  }, [cartItems]);
+
+  // BUG-07 Fix: Lock background body scroll when any drawer or modal is open
+  useEffect(() => {
+    const anyOverlayOpen =
+      isMobileFiltersOpen ||
+      isCartOpen ||
+      Boolean(selectedProduct) ||
+      isDashboardOpen ||
+      isAuthModalOpen;
+    document.body.style.overflow = anyOverlayOpen ? 'hidden' : '';
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [isMobileFiltersOpen, isCartOpen, selectedProduct, isDashboardOpen, isAuthModalOpen]);
+
   const [filters, setFilters] = useState<FilterState>({
     searchQuery: '',
     selectedBrands: [],
     selectedCategories: [],
     priceRange: [0, 300000],
     inStockOnly: false,
-    selectedVoltages: [], // Mapped to unit_of_measure facets (հատ, տուփ, կգ, մ, զույգ)
+    selectedVoltages: [],
   });
 
-  // Reset to page 1 when filters or sorting change
-  useEffect(() => {
-    setPage(1);
-  }, [
-    filters.searchQuery,
-    filters.selectedCategories,
-    filters.selectedVoltages,
-    filters.priceRange,
-    filters.inStockOnly,
-    sortBy,
-    sortOrder,
-  ]);
+  const loadLocalFullSnapshot = useCallback(async (): Promise<Product[]> => {
+    if (localCatalogCacheRef.current) {
+      return localCatalogCacheRef.current;
+    }
+    const resp = await fetch('/products_catalog.json');
+    if (!resp.ok) {
+      return [];
+    }
+    const raw = await resp.json();
+    const mapped = Array.isArray(raw) ? raw.map(mapApiItemToProduct) : [];
+    localCatalogCacheRef.current = mapped;
+    return mapped;
+  }, []);
 
-  // Fetch products from GET /api/v1/products with pagination, filtering & sorting
-  const fetchProducts = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const params = new URLSearchParams();
-      params.set('page', String(page));
-      params.set('page_size', String(pageSize));
-      params.set('sort_by', sortBy);
-      params.set('sort_order', sortOrder);
-
-      if (filters.searchQuery?.trim()) {
-        params.set('q', filters.searchQuery.trim());
-      }
-      if (filters.selectedCategories.length > 0) {
-        params.set('category', filters.selectedCategories.join(','));
-      }
-      if (filters.selectedVoltages.length > 0) {
-        params.set('unit_of_measure', filters.selectedVoltages.join(','));
-      }
-      if (filters.priceRange[0] > 0) {
-        params.set('min_price', String(filters.priceRange[0]));
-      }
-      if (filters.priceRange[1] < 300000) {
-        params.set('max_price', String(filters.priceRange[1]));
-      }
-      if (filters.inStockOnly) {
-        params.set('in_stock_only', 'true');
-      }
-
-      const response = await fetch(`${API_BASE_URL}/products?${params.toString()}`);
-      if (!response.ok) {
-        throw new Error(`API returned status ${response.status}`);
-      }
-      const data = await response.json();
-
-      if (Array.isArray(data)) {
-        const mapped = data.map(mapApiItemToProduct);
-        setProducts(mapped);
-        setTotalProducts(mapped.length);
-        setTotalPages(1);
+  // BUG-09 Fix: AbortController support to cancel in-flight requests and prevent race conditions
+  const fetchCatalogSlice = useCallback(
+    async (currentOffset: number, append: boolean, signal?: AbortSignal) => {
+      if (append) {
+        setIsLoadingMore(true);
       } else {
-        const mapped = (data.items || []).map(mapApiItemToProduct);
-        setProducts(mapped);
-        setTotalProducts(Number(data.total ?? mapped.length));
-        setTotalPages(Number(data.total_pages ?? 1));
+        setIsLoading(true);
+      }
+
+      try {
+        const params = new URLSearchParams();
+        params.set('limit', String(BATCH_LIMIT));
+        params.set('offset', String(currentOffset));
+        params.set('sort_by', sortBy);
+        params.set('sort_order', sortOrder);
+
+        if (filters.searchQuery?.trim()) {
+          params.set('q', filters.searchQuery.trim());
+        }
+        if (filters.selectedCategories.length > 0) {
+          params.set('category', filters.selectedCategories.join(','));
+        }
+        if (filters.selectedVoltages.length > 0) {
+          params.set('unit_of_measure', filters.selectedVoltages.join(','));
+        }
+        if (filters.priceRange[0] > 0) {
+          params.set('min_price', String(filters.priceRange[0]));
+        }
+        if (filters.priceRange[1] < 300000) {
+          params.set('max_price', String(filters.priceRange[1]));
+        }
+        if (filters.inStockOnly) {
+          params.set('in_stock_only', 'true');
+        }
+
+        const response = await fetch(`${API_BASE_URL}/products?${params.toString()}`, {
+          signal,
+        });
+        if (!response.ok) {
+          throw new Error(`API status ${response.status}`);
+        }
+        const data = await response.json();
+        if (signal?.aborted) return;
+
+        const mapped: Product[] = (Array.isArray(data) ? data : data.items || []).map(
+          mapApiItemToProduct
+        );
+        const total = Number(data.total ?? mapped.length);
+
+        setProducts((prev) => (append ? [...prev, ...mapped] : mapped));
+        setTotalProducts(total);
+        setOffset(currentOffset + mapped.length);
+        setHasMore(Boolean(data.has_more ?? currentOffset + mapped.length < total));
+
         if (Array.isArray(data.categories)) {
           setApiCategories(data.categories);
         }
         if (Array.isArray(data.units)) {
           setApiUnits(data.units);
         }
-      }
-    } catch (err) {
-      // Fallback if backend isn't running
-      setProducts(FALLBACK_SURO_CATALOG);
-      setTotalProducts(FALLBACK_SURO_CATALOG.length);
-      setTotalPages(1);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, pageSize, sortBy, sortOrder, filters]);
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || signal?.aborted) {
+          return;
+        }
+        const allLocal = await loadLocalFullSnapshot();
+        if (signal?.aborted) return;
 
+        const catCounts: Record<string, number> = {};
+        const unitCounts: Record<string, number> = {};
+        allLocal.forEach((p) => {
+          catCounts[p.category] = (catCounts[p.category] || 0) + 1;
+          unitCounts[p.unit_of_measure] = (unitCounts[p.unit_of_measure] || 0) + 1;
+        });
+        setApiCategories(
+          Object.entries(catCounts)
+            .sort((a, b) => b[1] - a[1])
+            .map(([value, count]) => ({ value, label: `${value} (${count})`, count }))
+        );
+        setApiUnits(
+          Object.entries(unitCounts)
+            .sort((a, b) => b[1] - a[1])
+            .map(([value, count]) => ({ value, label: `${value} (${count})`, count }))
+        );
+
+        const q = (filters.searchQuery || '').trim().toLowerCase();
+        const filtered = allLocal.filter((p) => {
+          if (filters.inStockOnly && !p.inStock) return false;
+          if (
+            filters.selectedCategories.length > 0 &&
+            !filters.selectedCategories.includes(p.category)
+          ) {
+            return false;
+          }
+          if (
+            filters.selectedVoltages.length > 0 &&
+            !filters.selectedVoltages.includes(p.unit_of_measure)
+          ) {
+            return false;
+          }
+          if (p.retail_price < filters.priceRange[0]) return false;
+          if (filters.priceRange[1] < 300000 && p.retail_price > filters.priceRange[1]) {
+            return false;
+          }
+          if (
+            q &&
+            !p.name.toLowerCase().includes(q) &&
+            !p.sku.toLowerCase().includes(q) &&
+            !(p.barcode || '').toLowerCase().includes(q)
+          ) {
+            return false;
+          }
+          return true;
+        });
+
+        const dir = sortOrder === 'desc' ? -1 : 1;
+        filtered.sort((a, b) => {
+          if (sortBy === 'retail_price') return (a.retail_price - b.retail_price) * dir;
+          if (sortBy === 'name') return a.name.localeCompare(b.name) * dir;
+          return a.sku.localeCompare(b.sku) * dir;
+        });
+
+        const slice = filtered.slice(currentOffset, currentOffset + BATCH_LIMIT);
+        setProducts((prev) => (append ? [...prev, ...slice] : slice));
+        setTotalProducts(filtered.length);
+        setOffset(currentOffset + slice.length);
+        setHasMore(currentOffset + slice.length < filtered.length);
+      } finally {
+        if (!signal?.aborted) {
+          setIsLoading(false);
+          setIsLoadingMore(false);
+        }
+      }
+    },
+    [filters, sortBy, sortOrder, loadLocalFullSnapshot]
+  );
+
+  // BUG-09 Fix: Debounce filter changes by 200ms and abort any previous in-flight request
   useEffect(() => {
-    fetchProducts();
-  }, [fetchProducts]);
-
-  // Open product detail modal by ID (fetches from API if not in current page slice)
-  const handleSelectProductById = async (productId: string) => {
-    const existing = products.find((p) => p.id === productId || p.sku === productId);
-    if (existing) {
-      setSelectedProduct(existing);
-      return;
-    }
-    try {
-      const resp = await fetch(`${API_BASE_URL}/products/${encodeURIComponent(productId)}`);
-      if (resp.ok) {
-        const detail = await resp.json();
-        setSelectedProduct(mapApiItemToProduct(detail));
+    const timer = window.setTimeout(() => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
       }
-    } catch {
-      // Ignore if offline
-    }
-  };
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      fetchCatalogSlice(0, false, controller.signal);
+    }, 200);
 
-  // Dynamic Facets Calculation
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [fetchCatalogSlice]);
+
+  const handleLoadMore = useCallback(() => {
+    if (!isLoading && !isLoadingMore && hasMore) {
+      fetchCatalogSlice(offset, true);
+    }
+  }, [isLoading, isLoadingMore, hasMore, offset, fetchCatalogSlice]);
+
+  const handleResetFilters = useCallback(() => {
+    setFilters({
+      searchQuery: '',
+      selectedBrands: [],
+      selectedCategories: [],
+      priceRange: [0, 300000],
+      inStockOnly: false,
+      selectedVoltages: [],
+    });
+  }, []);
+
+  const handleToggleCategory = useCallback((category: string) => {
+    setFilters((prev) => {
+      const exists = prev.selectedCategories.includes(category);
+      const next = exists
+        ? prev.selectedCategories.filter((c) => c !== category)
+        : [category];
+      return { ...prev, selectedCategories: next };
+    });
+  }, []);
+
+  const handleSelectSingleCategory = useCallback((category: string | null) => {
+    setFilters((prev) => ({
+      ...prev,
+      selectedCategories: category ? [category] : [],
+    }));
+  }, []);
+
+  const handleSelectProductById = useCallback(
+    async (productId: string) => {
+      const existing = products.find((p) => p.id === productId || p.sku === productId);
+      if (existing) {
+        setSelectedProduct(existing);
+        return;
+      }
+      try {
+        const resp = await fetch(`${API_BASE_URL}/products/${encodeURIComponent(productId)}`);
+        if (resp.ok) {
+          const detail = await resp.json();
+          setSelectedProduct(mapApiItemToProduct(detail));
+          return;
+        }
+      } catch {
+        // Fallback to local snapshot
+      }
+      const allLocal = await loadLocalFullSnapshot();
+      const found = allLocal.find((p) => p.id === productId || p.sku === productId);
+      if (found) {
+        setSelectedProduct(found);
+      }
+    },
+    [products, loadLocalFullSnapshot]
+  );
+
   const brandFacets = useMemo<FacetOption[]>(() => {
-    return [{ value: 'Սուրո', label: `Սուրո (${totalProducts || products.length})`, count: totalProducts || products.length }];
+    return [
+      {
+        value: 'Սուրո',
+        label: `Սուրո (${totalProducts || products.length})`,
+        count: totalProducts || products.length,
+      },
+    ];
   }, [totalProducts, products.length]);
 
-  const categoryFacets = useMemo<FacetOption[]>(() => {
-    if (apiCategories.length > 0) return apiCategories;
-    const counts: Record<string, number> = {};
-    products.forEach((p) => {
-      counts[p.category] = (counts[p.category] || 0) + 1;
-    });
-    return Object.entries(counts).map(([value, count]) => ({
-      value,
-      label: `${value} (${count})`,
-      count,
-    }));
-  }, [apiCategories, products]);
-
-  const unitFacets = useMemo<FacetOption[]>(() => {
-    if (apiUnits.length > 0) return apiUnits;
-    const counts: Record<string, number> = {};
-    products.forEach((p) => {
-      const u = p.unit_of_measure || 'հատ';
-      counts[u] = (counts[u] || 0) + 1;
-    });
-    return Object.entries(counts).map(([value, count]) => ({
-      value,
-      label: `${value} (${count})`,
-      count,
-    }));
-  }, [apiUnits, products]);
-
-  // Cart operations
-  const handleAddToCart = (product: Product) => {
+  const handleAddToCart = useCallback((product: Product, quantityToAdd: number = 1) => {
     setCartItems((prev) => {
       const existing = prev.find((item) => item.product.id === product.id);
       if (existing) {
         return prev.map((item) =>
-          item.product.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
+          item.product.id === product.id
+            ? { ...item, quantity: item.quantity + quantityToAdd }
+            : item
         );
       }
-      return [...prev, { product, quantity: 1 }];
+      return [...prev, { product, quantity: quantityToAdd }];
     });
-  };
+  }, []);
 
-  const handleUpdateQuantity = (productId: string, quantity: number) => {
-    if (quantity <= 0) {
-      handleRemoveItem(productId);
-      return;
-    }
-    setCartItems((prev) =>
-      prev.map((item) => (item.product.id === productId ? { ...item, quantity } : item))
-    );
-  };
-
-  const handleRemoveItem = (productId: string) => {
+  const handleRemoveItem = useCallback((productId: string) => {
     setCartItems((prev) => prev.filter((item) => item.product.id !== productId));
-  };
+  }, []);
 
-  const handleClearCart = () => setCartItems([]);
+  const handleUpdateQuantity = useCallback(
+    (productId: string, quantity: number) => {
+      if (quantity <= 0) {
+        handleRemoveItem(productId);
+        return;
+      }
+      setCartItems((prev) =>
+        prev.map((item) => (item.product.id === productId ? { ...item, quantity } : item))
+      );
+    },
+    [handleRemoveItem]
+  );
+
+  const handleClearCart = useCallback(() => setCartItems([]), []);
+  const handleQuickView = useCallback((p: Product) => setSelectedProduct(p), []);
+  const handleSortChange = useCallback((field: string, dir: 'asc' | 'desc') => {
+    setSortBy(field);
+    setSortOrder(dir);
+  }, []);
+
+  const cartCount = cartItems.reduce((s, i) => s + i.quantity, 0);
+  // BUG-04 Fix: Apply B2B wholesale pricing in header cart total when company user is signed in
+  const cartTotal = cartItems.reduce(
+    (s, i) => s + getEffectiveUnitPrice(i.product, user) * i.quantity,
+    0
+  );
 
   return (
-    <div className="min-h-screen bg-[#F8F9FA] text-[#0B0F17] flex flex-col font-sans">
-      {/* Header with Elasticsearch / Catalog Autocomplete */}
+    <div className="min-h-screen bg-[#F5F7F8] text-[#0B0F17] flex flex-col font-sans">
       <Header
-        cartCount={cartItems.reduce((s, i) => s + i.quantity, 0)}
+        cartCount={cartCount}
+        cartTotal={cartTotal}
         onOpenCart={() => setIsCartOpen(true)}
         onOpenMobileFilters={() => setIsMobileFiltersOpen(true)}
         onSelectProduct={handleSelectProductById}
         onSearchSubmit={(q) => setFilters((f) => ({ ...f, searchQuery: q }))}
         onOpenDashboard={() => setIsDashboardOpen(true)}
+        categories={apiCategories}
+        selectedCategories={filters.selectedCategories}
+        onSelectCategory={handleSelectSingleCategory}
       />
 
-      {/* Main Content Stage */}
-      <main className="mx-auto flex-1 w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
-        {/* Minimal Hero Header: Vast Whitespace */}
-        <div className="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-neutral-200/50 pb-8">
+      <main className="mx-auto flex-1 w-full max-w-[1440px] px-4 sm:px-6 lg:px-10 py-8">
+        {/* Industrial Promotional Hero Banner */}
+        <div className="mb-8 rounded-2xl bg-gradient-to-r from-[#0D5257] to-[#093B3F] p-6 sm:p-8 text-white shadow-md flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div>
-            <div className="flex items-center gap-2 mb-2">
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 py-0.5 text-xs font-semibold text-neutral-800">
-                <Sparkles className="h-3 w-3" />
-                Antigravity Catalog • Սուրո
-              </span>
-              <span className="text-xs text-neutral-400 font-mono">PostgreSQL + Elasticsearch</span>
+            <div className="inline-flex items-center gap-2 rounded-md bg-[#DA291C] px-2.5 py-1 text-[11px] font-extrabold uppercase tracking-wider text-white mb-3">
+              <span>{t('heroBadge')}</span>
             </div>
-            <h1 className="text-3xl font-extrabold tracking-tight sm:text-4xl text-neutral-900">
-              Շինարարական Ապրանքներ և Գործիքներ
+            <h1 className="text-2xl sm:text-3xl lg:text-4xl font-black tracking-tight leading-tight">
+              {t('heroTitle')}
             </h1>
-            <p className="mt-2 text-sm text-neutral-500 max-w-xl">
-              Ամբողջական տեսականի ներմուծված «Products Սուրո.xlsx» բազայից՝ ակնթարթային որոնմամբ և Antigravity ինտերֆեյսով։
+            <p className="mt-2 text-xs sm:text-sm text-white/80 max-w-2xl leading-relaxed">
+              {t('heroSubtitle')}
             </p>
           </div>
 
-          {/* Results Count & Sorting Control */}
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="flex items-center gap-2 text-xs font-mono text-neutral-500">
-              <span>
-                Ցուցադրված է <strong className="text-neutral-900">{products.length}</strong> /{' '}
-                <strong className="text-neutral-900">{totalProducts.toLocaleString()}</strong> ապրանք
-              </span>
-              {filters.searchQuery && (
-                <span className="text-neutral-900 font-semibold">
-                  «{filters.searchQuery}»
-                </span>
-              )}
-            </div>
-
-            <div className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 shadow-sm ring-1 ring-neutral-200/60">
-              <ArrowUpDown className="h-3.5 w-3.5 text-neutral-400" />
-              <select
-                aria-label="Sort products"
-                value={`${sortBy}:${sortOrder}`}
-                onChange={(e) => {
-                  const [field, dir] = e.target.value.split(':');
-                  setSortBy(field);
-                  setSortOrder(dir as 'asc' | 'desc');
-                }}
-                className="bg-transparent text-xs font-semibold text-neutral-800 outline-none cursor-pointer"
-              >
-                <option value="sku:asc">Կոդ (00001 → 01391)</option>
-                <option value="sku:desc">Կոդ (01391 → 00001)</option>
-                <option value="retail_price:asc">Մանրածախ գին՝ Աճող</option>
-                <option value="retail_price:desc">Մանրածախ գին՝ Նվազող</option>
-                <option value="name:asc">Անվանում (Ա → Ֆ)</option>
-              </select>
-            </div>
+          <div className="flex flex-wrap items-center gap-3 flex-shrink-0">
+            <button
+              type="button"
+              onClick={() => openAuthModal('register')}
+              className="rounded-xl bg-[#FFAB00] px-5 py-3 text-xs font-black uppercase tracking-wider text-[#0B0F17] shadow hover:bg-[#ffc13b] transition-colors"
+            >
+              {t('heroCta')}
+            </button>
           </div>
         </div>
 
-        {/* Catalog Section with Sidebar Filters & Product Grid */}
+        {/* Symmetrical PLP Layout */}
         <div className="flex gap-8 items-start">
-          {/* Dynamic Faceted Sidebar Filter */}
           <FacetedFilter
             filters={filters}
             onChange={setFilters}
             brandFacets={brandFacets}
-            categoryFacets={categoryFacets}
-            voltageFacets={unitFacets}
+            categoryFacets={apiCategories}
+            voltageFacets={apiUnits}
             isMobileOpen={isMobileFiltersOpen}
             onCloseMobile={() => setIsMobileFiltersOpen(false)}
             totalFilteredCount={totalProducts}
           />
 
-          {/* Product Grid with Antigravity Hover Effect */}
-          <section className="flex-1 min-w-0">
-            {isLoading ? (
-              <div className="flex flex-col items-center justify-center rounded-2xl bg-white p-16 text-center shadow-sm">
-                <Loader2 className="h-7 w-7 animate-spin text-neutral-400 mb-3" />
-                <p className="text-sm font-semibold text-neutral-800">Loading product catalog...</p>
-              </div>
-            ) : products.length === 0 ? (
-              <div className="flex flex-col items-center justify-center rounded-2xl bg-white p-12 text-center shadow-sm">
-                <p className="text-sm font-semibold text-neutral-900">No products match your filters</p>
-                <p className="mt-1 text-xs text-neutral-400">
-                  Try adjusting the price range or resetting selected filters.
-                </p>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setFilters({
-                      searchQuery: '',
-                      selectedBrands: [],
-                      selectedCategories: [],
-                      priceRange: [0, 300000],
-                      inStockOnly: false,
-                      selectedVoltages: [],
-                    })
-                  }
-                  className="mt-4 rounded-xl bg-black px-4 py-2 text-xs font-bold text-white hover:bg-neutral-800"
-                >
-                  Clear All Filters
-                </button>
-              </div>
-            ) : (
-              <>
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
-                  {products.map((product) => (
-                    <ProductCard
-                      key={product.id}
-                      product={product}
-                      onAddToCart={handleAddToCart}
-                      onQuickView={(p) => setSelectedProduct(p)}
-                    />
-                  ))}
-                </div>
-
-                {/* Pagination Bar */}
-                {totalPages > 1 && (
-                  <div className="mt-10 flex items-center justify-between rounded-2xl bg-white px-5 py-4 shadow-sm ring-1 ring-neutral-200/50">
-                    <span className="text-xs text-neutral-500 font-mono">
-                      Էջ <strong className="text-neutral-900">{page}</strong> / {totalPages} ({totalProducts.toLocaleString()} ապրանք)
-                    </span>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        disabled={page <= 1}
-                        onClick={() => {
-                          setPage((p) => Math.max(1, p - 1));
-                          window.scrollTo({ top: 0, behavior: 'smooth' });
-                        }}
-                        className="inline-flex items-center gap-1 rounded-xl border border-neutral-200 px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50 disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        <ChevronLeft className="h-3.5 w-3.5" />
-                        <span>Նախորդ</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        disabled={page >= totalPages}
-                        onClick={() => {
-                          setPage((p) => Math.min(totalPages, p + 1));
-                          window.scrollTo({ top: 0, behavior: 'smooth' });
-                        }}
-                        className="inline-flex items-center gap-1 rounded-xl bg-[#0B0F17] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-black disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        <span>Հաջորդ</span>
-                        <ChevronRight className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-          </section>
+          <Catalog
+            products={products}
+            totalProducts={totalProducts}
+            isLoading={isLoading}
+            isLoadingMore={isLoadingMore}
+            hasMore={hasMore}
+            onLoadMore={handleLoadMore}
+            onResetFilters={handleResetFilters}
+            onAddToCart={handleAddToCart}
+            onQuickView={handleQuickView}
+            categories={apiCategories}
+            selectedCategories={filters.selectedCategories}
+            onToggleCategory={handleToggleCategory}
+            sortBy={sortBy}
+            sortOrder={sortOrder}
+            onSortChange={handleSortChange}
+            onOpenMobileFilters={() => setIsMobileFiltersOpen(true)}
+          />
         </div>
       </main>
 
-      {/* Slide-over Cart Drawer with One-Page Guest Checkout */}
       <CartDrawer
         isOpen={isCartOpen}
         onClose={() => setIsCartOpen(false)}
@@ -531,45 +516,38 @@ export const AppContent: React.FC = () => {
         onClearCart={handleClearCart}
       />
 
-      {/* Product Detail Modal (PDP) with Zoomable Gallery & Sticky Add-to-Cart */}
       <ProductDetailModal
         product={selectedProduct}
         isOpen={Boolean(selectedProduct)}
         onClose={() => setSelectedProduct(null)}
-        onAddToCart={handleAddToCart}
+        onAddToCart={(p) => handleAddToCart(p, 1)}
       />
 
-      {/* Enterprise Auth Modal (B2C & B2B Dual Flow) */}
       <AuthModal />
 
-      {/* Protected User Dashboard */}
       <UserDashboard
         isOpen={isDashboardOpen}
         onClose={() => setIsDashboardOpen(false)}
-        onAddToCart={handleAddToCart}
+        onAddToCart={(p) => handleAddToCart(p, 1)}
       />
 
-      {/* Footer */}
-      <footer className="mt-20 border-t border-neutral-200/60 bg-white py-12 text-xs text-neutral-400">
-        <div className="mx-auto flex max-w-7xl flex-col sm:flex-row items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
-          <p>© 2026 AuraTools Technologies • Սուրո Catalog. Minimalist Antigravity E-Commerce Architecture.</p>
-          <div className="flex gap-6">
-            <a href="#privacy" className="hover:text-black">Privacy</a>
-            <a href="#terms" className="hover:text-black">Terms</a>
-            <a href="#support" className="hover:text-black">Jobsite Support</a>
-          </div>
-        </div>
-      </footer>
+      <Footer
+        totalProducts={totalProducts || 1391}
+        onSelectCategory={handleSelectSingleCategory}
+        onOpenB2BRegister={() => openAuthModal('register')}
+      />
     </div>
   );
 };
 
 export default function App() {
   return (
-    <AuthProvider>
-      <WishlistProvider>
-        <AppContent />
-      </WishlistProvider>
-    </AuthProvider>
+    <LanguageProvider>
+      <AuthProvider>
+        <WishlistProvider>
+          <AppContent />
+        </WishlistProvider>
+      </AuthProvider>
+    </LanguageProvider>
   );
 }

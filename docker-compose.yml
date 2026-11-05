@@ -1,72 +1,105 @@
-version: '3.8'
-
 services:
   # ---------------------------------------------------------------------------
-  # PostgreSQL (Relational persistence: Products, Users, Carts, Wishlists)
+  # 1. PostgreSQL 16 Service (ARM64 Apple Silicon Optimized)
   # ---------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
-    container_name: auratools_postgres
+    platform: linux/arm64
+    container_name: hardware_store_postgres
+    restart: unless-stopped
+    shm_size: 256mb
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgrespassword
-      POSTGRES_DB: hardware_store
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    command: >
+      postgres
+      -c shared_buffers=256MB
+      -c effective_cache_size=768MB
+      -c work_mem=16MB
+      -c maintenance_work_mem=128MB
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c max_connections=100
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./backend/database/schema.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./backend/database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    networks:
+      - hardware_network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 5s
 
   # ---------------------------------------------------------------------------
-  # Elasticsearch 8.x (Typo-tolerant autocomplete, fuzzy & faceted search)
+  # 2. Elasticsearch 8.12 Single-Node Service (Autocomplete & Faceted Search)
   # ---------------------------------------------------------------------------
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
-    container_name: auratools_elasticsearch
+    platform: linux/arm64
+    container_name: hardware_store_elasticsearch
+    restart: unless-stopped
     environment:
-      - node.name=auratools-node1
-      - cluster.name=auratools-cluster
+      - node.name=hardware-es-node
+      - cluster.name=hardware-es-cluster
       - discovery.type=single-node
+      - bootstrap.memory_lock=true
       - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
       - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
     ports:
       - "9200:9200"
     volumes:
       - esdata:/usr/share/elasticsearch/data
+      - ./backend/elasticsearch/mappings.json:/usr/share/elasticsearch/config/mappings.json:ro
+    networks:
+      - hardware_network
     healthcheck:
-      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cat/health | grep -q green || grep -q yellow"]
+      test: ["CMD-SHELL", "curl -fsSL http://localhost:9200/_cluster/health | grep -vq '\"status\":\"red\"'"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 12
 
   # ---------------------------------------------------------------------------
-  # Redis 7 (Cart sessions, rate limiting, and fast cache)
-  # ---------------------------------------------------------------------------
-  redis:
-    image: redis:7-alpine
-    container_name: auratools_redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redisdata:/data
-
-  # ---------------------------------------------------------------------------
-  # Backend API (FastAPI / Python 3)
+  # 3. FastAPI Backend Service (No hardcoded secrets; requires .env)
   # ---------------------------------------------------------------------------
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: auratools_backend
+    platform: linux/arm64
+    container_name: hardware_store_backend
+    restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgrespassword@postgres:5432/hardware_store
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
       ELASTICSEARCH_URL: http://elasticsearch:9200
-      REDIS_URL: redis://redis:6379/0
+      ELASTICSEARCH_INDEX: ${ELASTICSEARCH_INDEX:-hardware_products}
+      SECRET_KEY: ${SECRET_KEY}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+    volumes:
+      - "./Products Սուրո.xlsx:/app/database/Products Սուրո.xlsx:ro"
+    command: >
+      sh -c "alembic upgrade head &&
+             python database/seed.py &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
     ports:
       - "8000:8000"
     depends_on:
@@ -74,8 +107,14 @@ services:
         condition: service_healthy
       elasticsearch:
         condition: service_healthy
+    networks:
+      - hardware_network
+
+networks:
+  hardware_network:
+    name: hardware_network
+    driver: bridge
 
 volumes:
   pgdata:
   esdata:
-  redisdata:

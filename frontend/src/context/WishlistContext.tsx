@@ -1,6 +1,7 @@
 import React, { createContext, useEffect, useState, useCallback, useMemo } from 'react';
 import { Product } from '../types/product';
 import { useAuth } from './AuthContext';
+import { API_BASE_URL } from '../config/api';
 
 interface WishlistContextType {
   wishlist: Product[];
@@ -13,7 +14,6 @@ interface WishlistContextType {
 }
 
 const GUEST_STORAGE_KEY = 'aura_store_guest_wishlist_v1';
-const API_BASE_URL = 'http://localhost:8000/api/v1';
 
 export const WishlistContext = createContext<WishlistContextType | undefined>(undefined);
 
@@ -55,7 +55,7 @@ export const WishlistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              Authorization: `Bearer ${accessToken}`, // in-memory bearer token
+              Authorization: `Bearer ${accessToken}`,
             },
             body: JSON.stringify({ product_ids: guestProductIds }),
           });
@@ -69,25 +69,38 @@ export const WishlistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (response.ok) {
           const data = await response.json();
           if (data.items) {
-            // Map to Product interface
-            const mapped: Product[] = data.items.map((item: any) => ({
-              id: item.product_id,
-              name: item.name,
-              slug: item.slug,
-              sku: item.sku,
-              brand: item.brand,
-              category: 'Saved Items',
-              price: item.price,
-              currency: item.currency || 'USD',
-              inStock: item.in_stock,
-              stockQuantity: 10,
-              ratingAverage: 5.0,
-              ratingCount: 1,
-              imageUrl: item.thumbnail_url,
-              thumbnailUrl: item.thumbnail_url,
-              specifications: {},
-            }));
+            // ISSUE-06 Fix: Preserve AMD currency, retail_price, and unit_of_measure
+            const mapped: Product[] = data.items.map((item: any) => {
+              const unitPrice = Number(item.price || 0);
+              return {
+                id: String(item.product_id),
+                name: String(item.name || ''),
+                slug: String(item.slug || `product-${item.sku}`),
+                sku: String(item.sku || ''),
+                unit_of_measure: item.unit_of_measure || 'հատ',
+                category: item.category || 'Uncategorized',
+                retail_price: unitPrice,
+                wholesale_price: Number(item.wholesale_price || 0),
+                barcode: item.barcode || null,
+                vat_applicable: true,
+                discount_percent: 0,
+                description: null,
+                image_url: item.thumbnail_url || '',
+                is_active: Boolean(item.in_stock ?? true),
+                brand: item.brand || 'Սուրո',
+                price: unitPrice,
+                currency: item.currency || 'AMD',
+                inStock: Boolean(item.in_stock ?? true),
+                stockQuantity: 25,
+                ratingAverage: 4.8,
+                ratingCount: 12,
+                imageUrl: item.thumbnail_url || '',
+                thumbnailUrl: item.thumbnail_url || '',
+                specifications: {},
+              };
+            });
             setWishlist(mapped);
+            localStorage.setItem(GUEST_STORAGE_KEY, JSON.stringify(mapped));
           }
         }
       } catch (err) {
@@ -145,7 +158,6 @@ export const WishlistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           localStorage.setItem(GUEST_STORAGE_KEY, JSON.stringify(previousWishlist));
         }
       } else {
-        // Prompt guest user to sign in to ensure cross-device persistence
         openAuthModal('login');
       }
     },

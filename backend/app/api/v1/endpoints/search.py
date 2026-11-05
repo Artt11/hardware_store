@@ -7,6 +7,7 @@ from fastapi import APIRouter, Query
 from app.api.v1.endpoints.products import (
     get_all_catalog_records,
     get_placeholder_image,
+    query_catalog_from_postgres,
 )
 from app.schemas.search import (
     AutocompleteProductHit,
@@ -71,7 +72,20 @@ async def search_autocomplete(
     Matches Armenian product names, SKU codes (Կոդ), barcodes (Գծիկավոր կոդ), and categories.
     """
     clean_query = q.strip().lower()
-    all_records = await get_all_catalog_records()
+    pg_res = await query_catalog_from_postgres(
+        limit=50,
+        offset=0,
+        query_term=q.strip(),
+        categories_filter=[],
+        units_filter=[],
+        min_price=None,
+        max_price=None,
+        is_active=True,
+        in_stock_only=False,
+        sort_by="sku",
+        sort_order="asc",
+    )
+    all_records = pg_res[0] if pg_res is not None else await get_all_catalog_records()
 
     # Score matches: exact/prefix SKU or name prefix gets highest priority
     scored_matches = []

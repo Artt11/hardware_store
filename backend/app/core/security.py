@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from uuid import UUID
@@ -33,14 +34,31 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 
+async def async_hash_password(password: str) -> str:
+    """
+    ISSUE-03 Fix: Offloads CPU-bound bcrypt password hashing (12 rounds)
+    to a background worker thread so the FastAPI asyncio event loop is never blocked.
+    """
+    return await asyncio.to_thread(hash_password, password)
+
+
+async def async_verify_password(plain_password: str, hashed_password: str) -> bool:
+    """
+    ISSUE-03 Fix: Offloads CPU-bound bcrypt password verification
+    to a background worker thread so concurrent requests remain non-blocking.
+    """
+    return await asyncio.to_thread(verify_password, plain_password, hashed_password)
+
+
 def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
     """
     Generates short-lived Access Token (15 mins) kept in client memory.
     """
     to_encode = data.copy()
     now = datetime.now(timezone.utc)
-    expire = now + \
-        (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
+    expire = now + (
+        expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
     to_encode.update({
         "exp": expire,
         "iat": now,
@@ -55,8 +73,9 @@ def create_refresh_token(data: Dict[str, Any], expires_delta: Optional[timedelta
     """
     to_encode = data.copy()
     now = datetime.now(timezone.utc)
-    expire = now + \
-        (expires_delta or timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS))
+    expire = now + (
+        expires_delta or timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    )
     to_encode.update({
         "exp": expire,
         "iat": now,
@@ -70,8 +89,9 @@ def decode_access_token(token: str) -> Dict[str, Any]:
     Decodes and verifies an access token.
     """
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET,
-                             algorithms=[settings.JWT_ALGORITHM])
+        payload = jwt.decode(
+            token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM]
+        )
         if payload.get("type") != "access":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -91,8 +111,9 @@ def decode_refresh_token(token: str) -> Dict[str, Any]:
     Decodes and verifies a refresh token from HttpOnly cookie.
     """
     try:
-        payload = jwt.decode(token, settings.JWT_REFRESH_SECRET, algorithms=[
-                             settings.JWT_ALGORITHM])
+        payload = jwt.decode(
+            token, settings.JWT_REFRESH_SECRET, algorithms=[settings.JWT_ALGORITHM]
+        )
         if payload.get("type") != "refresh":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -107,8 +128,7 @@ def decode_refresh_token(token: str) -> Dict[str, Any]:
 
 
 async def get_current_user_payload(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(
-        security_bearer)
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_bearer)
 ) -> Dict[str, Any]:
     """
     Dependency that extracts and validates the in-memory Bearer token.
@@ -129,5 +149,6 @@ async def get_current_user_id(payload: Dict[str, Any] = Depends(get_current_user
     sub = payload.get("sub")
     if not sub:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject")
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject"
+        )
     return UUID(sub)

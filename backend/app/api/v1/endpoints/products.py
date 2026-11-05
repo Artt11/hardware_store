@@ -1,14 +1,26 @@
+"""
+SQL-Level Paginated, Filtered & Sorted Products Endpoint (`backend/app/api/v1/endpoints/products.py`).
+Fixes:
+- BUG-08: Pushes `WHERE`, `ORDER BY`, `LIMIT`, `OFFSET`, and facet `GROUP BY`
+  aggregations directly into PostgreSQL instead of loading all 1,391 rows into memory.
+- ISSUE-04:
+  1. Caches global catalog facet aggregations (`categories`, `units`, `min_price`, `max_price`)
+     for 60 seconds so paginated/filtered requests execute only 2 fast SQL queries (`COUNT` + `SELECT`).
+  2. Parses `UUID` in `get_product_detail` so UUID lookups use the primary key B-Tree index (`WHERE id = $1::uuid`)
+     instead of casting `LOWER(id::text)` on every row.
+"""
+
 import json
 import math
-import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID, uuid5
 
-import asyncpg
 from fastapi import APIRouter, HTTPException, Query, status
 
+from app.core.database import get_db_pool
 from app.schemas.product import (
     FacetCountItem,
     PaginatedProductsResponse,
@@ -24,17 +36,32 @@ SEEDED_JSON_PATH = BASE_DIR / "database" / "products_seeded.json"
 EXCEL_FILE_PATH = BASE_DIR / "database" / "Products Սուրո.xlsx"
 SKU_NAMESPACE = UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
-# Curated hardware & construction tool thumbnails when Excel row has Նկար = False (null)
 HARDWARE_PLACEHOLDER_IMAGES = [
-    "https://images.unsplash.com/photo-1504148455328-c376907d081c?auto=format&fit=crop&w=800&q=80",
-    "https://images.unsplash.com/photo-1581244277943-fe4a9c777189?auto=format&fit=crop&w=800&q=80",
-    "https://images.unsplash.com/photo-1586864387967-d02ef85d93e8?auto=format&fit=crop&w=800&q=80",
-    "https://images.unsplash.com/photo-1572981779307-38b8cabb2407?auto=format&fit=crop&w=800&q=80",
-    "https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?auto=format&fit=crop&w=800&q=80",
-    "https://images.unsplash.com/photo-1530124566582-a618bc2615dc?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1504148455328-c376907d081c?auto=format&fit=crop&w=1000&q=85",
+    "https://images.unsplash.com/photo-1581244277943-fe4a9c777189?auto=format&fit=crop&w=1000&q=85",
+    "https://images.unsplash.com/photo-1586864387967-d02ef85d93e8?auto=format&fit=crop&w=1000&q=85",
+    "https://images.unsplash.com/photo-1572981779307-38b8cabb2407?auto=format&fit=crop&w=1000&q=85",
+    "https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?auto=format&fit=crop&w=1000&q=85",
+    "https://images.unsplash.com/photo-1530124566582-a618bc2615dc?auto=format&fit=crop&w=1000&q=85",
 ]
 
 _CACHED_SEEDED_PRODUCTS: Optional[List[Dict[str, Any]]] = None
+
+# ISSUE-04 Fix: 60-second TTL cache for global catalog facets & price bounds
+_FACETS_CACHE_TTL_SECONDS = 60.0
+_FACETS_CACHE_TIMESTAMP: float = 0.0
+_FACETS_CACHE_DATA: Optional[
+    Tuple[List[FacetCountItem], List[FacetCountItem], float, float]
+] = None
+
+SAFE_SORT_COLUMNS = {
+    "sku": "sku",
+    "name": "name",
+    "retail_price": "retail_price",
+    "price": "retail_price",
+    "base_price": "retail_price",
+    "wholesale_price": "wholesale_price",
+}
 
 
 def get_placeholder_image(sku: str) -> str:
@@ -43,10 +70,7 @@ def get_placeholder_image(sku: str) -> str:
 
 
 def load_fallback_catalog() -> List[Dict[str, Any]]:
-    """
-    Load the 1,391 migrated Excel products from `products_seeded.json`
-    (or parse directly from `Products Սուրո.xlsx` if needed).
-    """
+    """Fallback JSON snapshot reader used only if PostgreSQL is unreachable."""
     global _CACHED_SEEDED_PRODUCTS
     if _CACHED_SEEDED_PRODUCTS is not None:
         return _CACHED_SEEDED_PRODUCTS
@@ -57,135 +81,223 @@ def load_fallback_catalog() -> List[Dict[str, Any]]:
             return _CACHED_SEEDED_PRODUCTS
         except Exception:
             pass
-
-    # Direct Excel fallback if JSON snapshot hasn't been generated yet
-    if EXCEL_FILE_PATH.exists():
-        from database.migrate_excel import parse_and_clean_excel  # type: ignore
-
-        raw = parse_and_clean_excel(EXCEL_FILE_PATH)
-        serialized = []
-        for p in raw:
-            item = dict(p)
-            item["retail_price"] = float(p["retail_price"])
-            item["wholesale_price"] = float(p["wholesale_price"])
-            item["base_price"] = float(p["base_price"])
-            item["discount_percent"] = float(p["discount_percent"])
-            item["compare_at_price"] = float(p["compare_at_price"]) if p["compare_at_price"] is not None else None
-            serialized.append(item)
-        _CACHED_SEEDED_PRODUCTS = serialized
-        return _CACHED_SEEDED_PRODUCTS
-
     return []
 
 
-async def fetch_catalog_from_postgres() -> Optional[List[Dict[str, Any]]]:
-    """
-    Query PostgreSQL `products` table for all products imported from "Products Սուրո.xlsx".
-    Returns None if PostgreSQL connection is unavailable in the current environment.
-    """
-    candidate_urls = [
-        os.getenv("DATABASE_URL", "").replace("postgresql+asyncpg://", "postgresql://"),
-        "postgresql://admin@localhost:5432/hardware_store",
-        "postgresql://postgres:postgres@localhost:5432/hardware_store",
-    ]
-    conn: Optional[asyncpg.Connection] = None
-    for url in candidate_urls:
-        if not url:
-            continue
-        try:
-            conn = await asyncpg.connect(url, timeout=1.5)
-            break
-        except Exception:
-            continue
+async def get_all_catalog_records() -> List[Dict[str, Any]]:
+    """Return cached fallback catalog records when full scan is requested."""
+    return load_fallback_catalog()
 
-    if conn is None:
+
+def row_to_dict(r: Any) -> Dict[str, Any]:
+    specs = r["specifications"]
+    if isinstance(specs, str):
+        try:
+            specs = json.loads(specs)
+        except Exception:
+            specs = {}
+    elif specs is None:
+        specs = {}
+
+    retail = float(
+        r["retail_price"] if r["retail_price"] is not None else (r["base_price"] or 0.0)
+    )
+    wholesale = float(r["wholesale_price"] or 0.0)
+    discount = float(r["discount_percent"] or 0.0)
+    return {
+        "id": str(r["id"]),
+        "sku": r["sku"],
+        "name": r["name"],
+        "slug": r["slug"] or f"product-{r['sku'].lower()}",
+        "unit_of_measure": r["unit_of_measure"] or "հատ",
+        "category": r["category"] or "Uncategorized",
+        "retail_price": retail,
+        "wholesale_price": wholesale,
+        "barcode": r["barcode"],
+        "vat_applicable": bool(r["vat_applicable"]) if r["vat_applicable"] is not None else True,
+        "discount_percent": discount,
+        "description": r["description"],
+        "image_url": r["image_url"],
+        "is_active": bool(r["is_active"]) if r["is_active"] is not None else True,
+        "base_price": retail,
+        "compare_at_price": (
+            float(r["compare_at_price"]) if r["compare_at_price"] is not None else None
+        ),
+        "currency": r["currency"] or "AMD",
+        "stock_quantity": int(r["stock_quantity"] if r["stock_quantity"] is not None else 25),
+        "specifications": dict(specs),
+        "rating_average": float(r["rating_average"] or 4.8),
+        "rating_count": int(r["rating_count"] or 12),
+        "created_at": r["created_at"],
+        "updated_at": r["updated_at"],
+    }
+
+
+async def _get_or_load_facets(
+    conn: Any,
+) -> Tuple[List[FacetCountItem], List[FacetCountItem], float, float]:
+    """
+    ISSUE-04 Fix: Returns global category/unit facets and price bounds from a 60s TTL cache,
+    eliminating 3 full-table aggregation queries on every paginated product request.
+    """
+    global _FACETS_CACHE_TIMESTAMP, _FACETS_CACHE_DATA
+    now = time.monotonic()
+    if (
+        _FACETS_CACHE_DATA is not None
+        and (now - _FACETS_CACHE_TIMESTAMP) < _FACETS_CACHE_TTL_SECONDS
+    ):
+        return _FACETS_CACHE_DATA
+
+    cat_rows = await conn.fetch(
+        """
+        SELECT COALESCE(category, 'Uncategorized') AS val, COUNT(*)::int AS cnt
+        FROM products
+        GROUP BY COALESCE(category, 'Uncategorized')
+        ORDER BY cnt DESC, val ASC;
+        """
+    )
+    unit_rows = await conn.fetch(
+        """
+        SELECT COALESCE(unit_of_measure, 'հատ') AS val, COUNT(*)::int AS cnt
+        FROM products
+        GROUP BY COALESCE(unit_of_measure, 'հատ')
+        ORDER BY cnt DESC, val ASC;
+        """
+    )
+    bounds_row = await conn.fetchrow(
+        "SELECT COALESCE(MIN(retail_price), 0)::float AS min_p, COALESCE(MAX(retail_price), 0)::float AS max_p FROM products;"
+    )
+
+    category_facets = [
+        FacetCountItem(value=r["val"], label=f"{r['val']} ({r['cnt']})", count=r["cnt"])
+        for r in cat_rows
+    ]
+    unit_facets = [
+        FacetCountItem(value=r["val"], label=f"{r['val']} ({r['cnt']})", count=r["cnt"])
+        for r in unit_rows
+    ]
+    min_p = float(bounds_row["min_p"]) if bounds_row else 0.0
+    max_p = float(bounds_row["max_p"]) if bounds_row else 0.0
+
+    _FACETS_CACHE_DATA = (category_facets, unit_facets, min_p, max_p)
+    _FACETS_CACHE_TIMESTAMP = now
+    return _FACETS_CACHE_DATA
+
+
+async def query_catalog_from_postgres(
+    *,
+    limit: int,
+    offset: int,
+    query_term: str,
+    categories_filter: List[str],
+    units_filter: List[str],
+    min_price: Optional[float],
+    max_price: Optional[float],
+    is_active: Optional[bool],
+    in_stock_only: bool,
+    sort_by: str,
+    sort_order: str,
+) -> Optional[
+    Tuple[
+        List[Dict[str, Any]],
+        int,
+        List[FacetCountItem],
+        List[FacetCountItem],
+        float,
+        float,
+    ]
+]:
+    """
+    BUG-08 & ISSUE-04 Fix: Executes parameterized SQL `WHERE`, `ORDER BY`, `LIMIT`, and `OFFSET`
+    directly inside PostgreSQL, returning only the requested page slice plus cached facet counts.
+    """
+    pool = await get_db_pool()
+    if pool is None:
         return None
+
+    where_clauses: List[str] = []
+    params: List[Any] = []
+
+    def add_param(val: Any) -> str:
+        params.append(val)
+        return f"${len(params)}"
+
+    if is_active is not None:
+        p_idx = add_param(is_active)
+        where_clauses.append(f"is_active = {p_idx}")
+
+    if in_stock_only:
+        where_clauses.append("is_active = TRUE AND stock_quantity > 0")
+
+    if query_term:
+        like_idx = add_param(f"%{query_term}%")
+        where_clauses.append(
+            f"(name ILIKE {like_idx} OR sku ILIKE {like_idx} OR "
+            f"COALESCE(barcode, '') ILIKE {like_idx} OR "
+            f"COALESCE(category, '') ILIKE {like_idx} OR "
+            f"COALESCE(description, '') ILIKE {like_idx})"
+        )
+
+    if categories_filter:
+        cat_idx = add_param([c.lower() for c in categories_filter])
+        where_clauses.append(f"LOWER(COALESCE(category, 'Uncategorized')) = ANY({cat_idx}::text[])")
+
+    if units_filter:
+        unit_idx = add_param([u.lower() for u in units_filter])
+        where_clauses.append(f"LOWER(COALESCE(unit_of_measure, 'հատ')) = ANY({unit_idx}::text[])")
+
+    if min_price is not None:
+        min_idx = add_param(min_price)
+        where_clauses.append(f"retail_price >= {min_idx}")
+
+    if max_price is not None:
+        max_idx = add_param(max_price)
+        where_clauses.append(f"retail_price <= {max_idx}")
+
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    order_col = SAFE_SORT_COLUMNS.get(sort_by.strip().lower(), "sku")
+    order_dir = "DESC" if sort_order.strip().lower() == "desc" else "ASC"
 
     try:
-        rows = await conn.fetch(
-            """
-            SELECT
-                id,
-                sku,
-                name,
-                slug,
-                unit_of_measure,
-                category,
-                retail_price,
-                wholesale_price,
-                barcode,
-                vat_applicable,
-                discount_percent,
-                description,
-                image_url,
-                is_active,
-                base_price,
-                compare_at_price,
-                currency,
-                stock_quantity,
-                specifications,
-                rating_average,
-                rating_count,
-                created_at,
-                updated_at
-            FROM products
-            ORDER BY sku ASC;
-            """
-        )
-        results: List[Dict[str, Any]] = []
-        for r in rows:
-            specs = r["specifications"]
-            if isinstance(specs, str):
-                try:
-                    specs = json.loads(specs)
-                except Exception:
-                    specs = {}
-            elif specs is None:
-                specs = {}
-
-            retail = float(r["retail_price"] if r["retail_price"] is not None else (r["base_price"] or 0.0))
-            wholesale = float(r["wholesale_price"] or 0.0)
-            discount = float(r["discount_percent"] or 0.0)
-            results.append(
-                {
-                    "id": str(r["id"]),
-                    "sku": r["sku"],
-                    "name": r["name"],
-                    "slug": r["slug"] or f"product-{r['sku'].lower()}",
-                    "unit_of_measure": r["unit_of_measure"] or "հատ",
-                    "category": r["category"] or "Uncategorized",
-                    "retail_price": retail,
-                    "wholesale_price": wholesale,
-                    "barcode": r["barcode"],
-                    "vat_applicable": bool(r["vat_applicable"]) if r["vat_applicable"] is not None else True,
-                    "discount_percent": discount,
-                    "description": r["description"],
-                    "image_url": r["image_url"],
-                    "is_active": bool(r["is_active"]) if r["is_active"] is not None else True,
-                    "base_price": retail,
-                    "compare_at_price": float(r["compare_at_price"]) if r["compare_at_price"] is not None else None,
-                    "currency": r["currency"] or "AMD",
-                    "stock_quantity": int(r["stock_quantity"] if r["stock_quantity"] is not None else 25),
-                    "specifications": dict(specs),
-                    "rating_average": float(r["rating_average"] or 4.8),
-                    "rating_count": int(r["rating_count"] or 12),
-                    "created_at": r["created_at"],
-                    "updated_at": r["updated_at"],
-                }
+        async with pool.acquire() as conn:
+            # 1. Total filtered count
+            total = int(
+                await conn.fetchval(f"SELECT COUNT(*) FROM products {where_sql};", *params) or 0
             )
-        return results
+
+            # 2. Paginated slice with SQL ORDER BY, LIMIT, OFFSET
+            limit_placeholder = add_param(limit)
+            offset_placeholder = add_param(offset)
+            rows = await conn.fetch(
+                f"""
+                SELECT
+                    id, sku, name, slug, unit_of_measure, category,
+                    retail_price, wholesale_price, barcode, vat_applicable,
+                    discount_percent, description, image_url, is_active,
+                    base_price, compare_at_price, currency, stock_quantity,
+                    specifications, rating_average, rating_count,
+                    created_at, updated_at
+                FROM products
+                {where_sql}
+                ORDER BY {order_col} {order_dir}
+                LIMIT {limit_placeholder} OFFSET {offset_placeholder};
+                """,
+                *params,
+            )
+
+            # 3. Cached global facets & price bounds (60s TTL)
+            category_facets, unit_facets, min_p, max_p = await _get_or_load_facets(conn)
+
+            return (
+                [row_to_dict(r) for r in rows],
+                total,
+                category_facets,
+                unit_facets,
+                min_p,
+                max_p,
+            )
     except Exception:
         return None
-    finally:
-        await conn.close()
-
-
-async def get_all_catalog_records() -> List[Dict[str, Any]]:
-    """Return products from PostgreSQL primary store, falling back to seeded snapshot if unreachable."""
-    pg_records = await fetch_catalog_from_postgres()
-    if pg_records and len(pg_records) > 0:
-        return pg_records
-    return load_fallback_catalog()
 
 
 def record_to_list_item(p: Dict[str, Any]) -> ProductListItem:
@@ -221,7 +333,7 @@ def record_to_list_item(p: Dict[str, Any]) -> ProductListItem:
         vat_applicable=vat_applicable,
         discount_percent=discount_percent,
         description=p.get("description"),
-        image_url=raw_image,
+        image_url=resolved_image,
         is_active=is_active,
         brand_name="Սուրո",
         category_name=category,
@@ -275,7 +387,7 @@ def record_to_detail(p: Dict[str, Any]) -> ProductDetail:
         discount_percent=discount_percent,
         description=p.get("description") or str(p["name"]),
         short_description=p.get("description") or f"Կոդ: {sku} • Չափման միավոր: {unit}",
-        image_url=raw_image,
+        image_url=resolved_image,
         is_active=is_active,
         brand_name="Սուրո",
         category_name=category,
@@ -304,26 +416,81 @@ def record_to_detail(p: Dict[str, Any]) -> ProductDetail:
 
 @router.get("", response_model=PaginatedProductsResponse)
 async def list_products(
-    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
-    page_size: int = Query(24, ge=1, le=2000, description="Number of products per page"),
+    limit: int = Query(36, ge=1, le=2000, description="Number of items to return (limit)"),
+    offset: int = Query(0, ge=0, description="Number of items to skip (offset)"),
+    page: Optional[int] = Query(None, ge=1, description="Optional 1-indexed page number"),
+    page_size: Optional[int] = Query(None, ge=1, le=2000, description="Optional page size override"),
     search: Optional[str] = Query(None, alias="q", description="Search by name, SKU, or barcode"),
     q: Optional[str] = Query(None, description="Search query string"),
     category: Optional[str] = Query(None, description="Filter by category (Խումբ)"),
-    unit_of_measure: Optional[str] = Query(None, description="Filter by unit of measure (Չափման միավոր, e.g. հատ, տուփ)"),
+    unit_of_measure: Optional[str] = Query(
+        None, description="Filter by unit of measure (Չափման միավոր, e.g. հատ, տուփ)"
+    ),
     brand: Optional[str] = Query(None, description="Filter by brand"),
     min_price: Optional[float] = Query(None, ge=0, description="Minimum retail_price"),
     max_price: Optional[float] = Query(None, ge=0, description="Maximum retail_price"),
-    is_active: Optional[bool] = Query(True, description="Filter by active status (derived from Փակված)"),
+    is_active: Optional[bool] = Query(
+        True, description="Filter by active status (derived from Փակված)"
+    ),
     in_stock_only: bool = Query(False, description="Only return active in-stock items"),
-    sort_by: str = Query("sku", description="Sort field: sku, name, retail_price, wholesale_price"),
+    sort_by: str = Query(
+        "sku", description="Sort field: sku, name, retail_price, wholesale_price"
+    ),
     sort_order: str = Query("asc", description="Sort direction: asc or desc"),
 ):
     """
-    List catalog products with pagination, multi-field filtering, facet counts, and sorting.
+    List catalog products using SQL-level `WHERE`, `ORDER BY`, `LIMIT`, and `OFFSET`
+    against PostgreSQL (falling back to local JSON snapshot only if DB is offline).
     """
-    all_records = await get_all_catalog_records()
+    effective_limit = page_size if page_size is not None else limit
+    if page is not None:
+        effective_offset = (page - 1) * effective_limit
+        effective_page = page
+    else:
+        effective_offset = offset
+        effective_page = (effective_offset // effective_limit) + 1
 
-    # Compute global facet counts across active catalog
+    query_term = (search or q or "").strip()
+    categories_filter = [c.strip() for c in (category or "").split(",") if c.strip()]
+    units_filter = [u.strip() for u in (unit_of_measure or "").split(",") if u.strip()]
+
+    pg_result = await query_catalog_from_postgres(
+        limit=effective_limit,
+        offset=effective_offset,
+        query_term=query_term,
+        categories_filter=categories_filter,
+        units_filter=units_filter,
+        min_price=min_price,
+        max_price=max_price,
+        is_active=is_active,
+        in_stock_only=in_stock_only,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+
+    if pg_result is not None:
+        page_slice, total, category_facets, unit_facets, min_p, max_p = pg_result
+        total_pages = max(1, math.ceil(total / effective_limit)) if total > 0 else 1
+        has_more = (effective_offset + len(page_slice)) < total
+        return PaginatedProductsResponse(
+            items=[record_to_list_item(p) for p in page_slice],
+            total=total,
+            limit=effective_limit,
+            offset=effective_offset,
+            page=effective_page,
+            page_size=effective_limit,
+            total_pages=total_pages,
+            has_more=has_more,
+            has_next=has_more,
+            has_prev=effective_offset > 0,
+            categories=category_facets,
+            units=unit_facets,
+            min_retail_price=min_p,
+            max_retail_price=max_p,
+        )
+
+    # Offline fallback if PostgreSQL is unreachable
+    all_records = load_fallback_catalog()
     cat_counts: Dict[str, int] = {}
     unit_counts: Dict[str, int] = {}
     prices: List[float] = []
@@ -344,42 +511,39 @@ async def list_products(
         for k, v in sorted(unit_counts.items(), key=lambda x: (-x[1], x[0]))
     ]
 
-    # Filtering
-    query_term = (search or q or "").strip().lower()
+    q_lower = query_term.lower()
     filtered = all_records
-
     if is_active is not None:
         filtered = [p for p in filtered if bool(p.get("is_active", True)) == is_active]
-
     if in_stock_only:
-        filtered = [p for p in filtered if bool(p.get("is_active", True)) and int(p.get("stock_quantity", 25)) > 0]
-
-    if query_term:
         filtered = [
             p
             for p in filtered
-            if query_term in str(p.get("name", "")).lower()
-            or query_term in str(p.get("sku", "")).lower()
-            or query_term in str(p.get("barcode") or "").lower()
-            or query_term in str(p.get("category") or "").lower()
-            or query_term in str(p.get("description") or "").lower()
+            if bool(p.get("is_active", True)) and int(p.get("stock_quantity", 25)) > 0
         ]
-
-    if category:
-        categories_filter = {c.strip().lower() for c in category.split(",") if c.strip()}
-        filtered = [p for p in filtered if str(p.get("category") or "Uncategorized").lower() in categories_filter]
-
-    if unit_of_measure:
-        units_filter = {u.strip().lower() for u in unit_of_measure.split(",") if u.strip()}
-        filtered = [p for p in filtered if str(p.get("unit_of_measure") or "հատ").lower() in units_filter]
-
+    if q_lower:
+        filtered = [
+            p
+            for p in filtered
+            if q_lower in str(p.get("name", "")).lower()
+            or q_lower in str(p.get("sku", "")).lower()
+            or q_lower in str(p.get("barcode") or "").lower()
+        ]
+    if categories_filter:
+        cat_set = {c.lower() for c in categories_filter}
+        filtered = [
+            p for p in filtered if str(p.get("category") or "Uncategorized").lower() in cat_set
+        ]
+    if units_filter:
+        unit_set = {u.lower() for u in units_filter}
+        filtered = [
+            p for p in filtered if str(p.get("unit_of_measure") or "հատ").lower() in unit_set
+        ]
     if min_price is not None:
         filtered = [p for p in filtered if float(p.get("retail_price", 0.0)) >= min_price]
-
     if max_price is not None:
         filtered = [p for p in filtered if float(p.get("retail_price", 0.0)) <= max_price]
 
-    # Sorting
     reverse = sort_order.strip().lower() == "desc"
     sort_field = sort_by.strip().lower()
     if sort_field in ("retail_price", "price", "base_price"):
@@ -391,23 +555,22 @@ async def list_products(
     else:
         filtered.sort(key=lambda p: str(p.get("sku", "")), reverse=reverse)
 
-    # Pagination
     total = len(filtered)
-    total_pages = max(1, math.ceil(total / page_size)) if total > 0 else 1
-    start_idx = (page - 1) * page_size
-    end_idx = start_idx + page_size
-    page_slice = filtered[start_idx:end_idx]
-
-    items = [record_to_list_item(p) for p in page_slice]
+    total_pages = max(1, math.ceil(total / effective_limit)) if total > 0 else 1
+    page_slice = filtered[effective_offset : effective_offset + effective_limit]
+    has_more = (effective_offset + len(page_slice)) < total
 
     return PaginatedProductsResponse(
-        items=items,
+        items=[record_to_list_item(p) for p in page_slice],
         total=total,
-        page=page,
-        page_size=page_size,
+        limit=effective_limit,
+        offset=effective_offset,
+        page=effective_page,
+        page_size=effective_limit,
         total_pages=total_pages,
-        has_next=page < total_pages,
-        has_prev=page > 1,
+        has_more=has_more,
+        has_next=has_more,
+        has_prev=effective_offset > 0,
         categories=category_facets,
         units=unit_facets,
         min_retail_price=min(prices) if prices else 0.0,
@@ -418,12 +581,63 @@ async def list_products(
 @router.get("/{product_id}", response_model=ProductDetail)
 async def get_product_detail(product_id: str):
     """
-    Get detailed product information by UUID or SKU.
+    Fetch a single product by UUID or SKU using an index-friendly SQL lookup.
+    ISSUE-04 Fix: Uses direct `WHERE id = $1::uuid` primary key lookup when `product_id`
+    is a valid UUID, avoiding `LOWER(id::text)` sequential scans.
     """
-    all_records = await get_all_catalog_records()
-    target = product_id.strip().lower()
-    for p in all_records:
-        if str(p.get("id", "")).lower() == target or str(p.get("sku", "")).lower() == target:
+    target = product_id.strip()
+    parsed_uuid: Optional[UUID] = None
+    try:
+        parsed_uuid = UUID(target)
+    except (ValueError, TypeError):
+        parsed_uuid = None
+
+    pool = await get_db_pool()
+    if pool is not None:
+        try:
+            async with pool.acquire() as conn:
+                if parsed_uuid is not None:
+                    row = await conn.fetchrow(
+                        """
+                        SELECT
+                            id, sku, name, slug, unit_of_measure, category,
+                            retail_price, wholesale_price, barcode, vat_applicable,
+                            discount_percent, description, image_url, is_active,
+                            base_price, compare_at_price, currency, stock_quantity,
+                            specifications, rating_average, rating_count,
+                            created_at, updated_at
+                        FROM products
+                        WHERE id = $1::uuid
+                        LIMIT 1;
+                        """,
+                        parsed_uuid,
+                    )
+                else:
+                    row = await conn.fetchrow(
+                        """
+                        SELECT
+                            id, sku, name, slug, unit_of_measure, category,
+                            retail_price, wholesale_price, barcode, vat_applicable,
+                            discount_percent, description, image_url, is_active,
+                            base_price, compare_at_price, currency, stock_quantity,
+                            specifications, rating_average, rating_count,
+                            created_at, updated_at
+                        FROM products
+                        WHERE LOWER(sku) = LOWER($1)
+                        LIMIT 1;
+                        """,
+                        target,
+                    )
+                if row is not None:
+                    return record_to_detail(row_to_dict(row))
+        except Exception:
+            pass
+
+    for p in load_fallback_catalog():
+        if (
+            str(p.get("id", "")).lower() == target.lower()
+            or str(p.get("sku", "")).lower() == target.lower()
+        ):
             return record_to_detail(p)
 
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")

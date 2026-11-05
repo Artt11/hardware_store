@@ -28,7 +28,6 @@ class ProductBase(BaseModel):
     image_url: Optional[str] = None
     is_active: bool = True
 
-    # Compatibility fields
     short_description: Optional[str] = None
     base_price: float
     compare_at_price: Optional[float] = None
@@ -54,7 +53,6 @@ class ProductListItem(BaseModel):
     image_url: Optional[str] = None
     is_active: bool = True
 
-    # Storefront & Antigravity UI compatibility fields
     brand_name: str = "Սուրո"
     category_name: str = "Uncategorized"
     base_price: float
@@ -95,9 +93,12 @@ class FacetCountItem(BaseModel):
 class PaginatedProductsResponse(BaseModel):
     items: List[ProductListItem]
     total: int
+    limit: int
+    offset: int
     page: int
     page_size: int
     total_pages: int
+    has_more: bool
     has_next: bool
     has_prev: bool
     categories: List[FacetCountItem] = Field(default_factory=list)

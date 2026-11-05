@@ -1,0 +1,22 @@
+# Environment & Secrets (Never commit .env; use .env.example)
+.env
+backend/.env
+frontend/.env.local
+
+# Python Virtual Environments & Bytecode
+store/
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Node / Frontend
+node_modules/
+.next/
+
+# Scratch / External Repos & Agent Skills
+ECC-main/
+.agents/
+skills-lock.json
+.DS_Store

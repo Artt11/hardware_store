@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+'use client';
+
+import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   X,
@@ -6,16 +8,22 @@ import {
   Plus,
   Minus,
   ArrowRight,
-  ShieldCheck,
+  ArrowLeft,
   Truck,
   CheckCircle2,
-  Lock,
   Building2,
-  User,
-  AlertCircle
+  CreditCard,
+  Banknote,
+  FileText,
+  Maximize2,
+  Minimize2,
+  AlertCircle,
 } from 'lucide-react';
 import { Product } from '../../types/product';
+import { formatProductPrice } from '../product/ProductCard';
 import { useAuth } from '../../context/AuthContext';
+import { useLanguage } from '../../context/LanguageContext';
+import { API_BASE_URL, getEffectiveUnitPrice } from '../../config/api';
 
 export interface CartItem {
   product: Product;
@@ -31,6 +39,11 @@ interface CartDrawerProps {
   onClearCart: () => void;
 }
 
+type CheckoutStep = 'cart' | 'shipping' | 'payment' | 'review' | 'complete';
+
+const PHONE_REGEX = /^\+?[0-9\s\-()]{8,18}$/;
+const ARMENIAN_HVHH_REGEX = /^\d{8}$/;
+
 export const CartDrawer: React.FC<CartDrawerProps> = ({
   isOpen,
   onClose,
@@ -40,121 +53,284 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   onClearCart,
 }) => {
   const { isAuthenticated, user, accessToken, openAuthModal } = useAuth();
-  
-  const [zipCode, setZipCode] = useState('94103');
-  const [isCheckingOut, setIsCheckingOut] = useState(false);
-  const [shippingAddress, setShippingAddress] = useState('100 Market St, Suite 400');
-  const [orderComplete, setOrderComplete] = useState(false);
+  const { t, translateUnit } = useLanguage();
+
+  const [step, setStep] = useState<CheckoutStep>('cart');
+  const [isFullPage, setIsFullPage] = useState<boolean>(false);
+
+  const [recipientName, setRecipientName] = useState(
+    user?.first_name ? `${user.first_name} ${user.last_name || ''}`.trim() : 'Արմեն Հակոբյան'
+  );
+  const [phone, setPhone] = useState(user?.phone || '+374 91 00-00-00');
+  const [city, setCity] = useState('Երևան');
+  const [shippingAddress, setShippingAddress] = useState('Արշակունյաց պող. 24');
+  const [deliveryMethod, setDeliveryMethod] = useState<'express' | 'pickup'>('express');
+
+  const [paymentMethod, setPaymentMethod] = useState<'card' | 'cash' | 'b2b_invoice'>('card');
+  const [companyTaxId, setCompanyTaxId] = useState(user?.tax_id || '');
+
+  const [stepValidationError, setStepValidationError] = useState<string | null>(null);
   const [completedOrderNumber, setCompletedOrderNumber] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const completeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Financial calculations
-  const subtotal = items.reduce((acc, item) => acc + item.product.price * item.quantity, 0);
-  const freeShippingThreshold = 99;
-  const shipping = subtotal >= freeShippingThreshold || subtotal === 0 ? 0 : 9.99;
-  const estimatedTax = subtotal * 0.0825; // 8.25% average sales tax
-  const grandTotal = subtotal + shipping + estimatedTax;
-
-  // Enforce strictly protected checkout
-  const handleProceedToCheckout = () => {
-    if (!isAuthenticated) {
-      // Trigger login modal and queue resuming checkout upon success
-      openAuthModal('login', () => {
-        setIsCheckingOut(true);
-      });
-    } else {
-      setIsCheckingOut(true);
+  // BUG-06 & ISSUE-08 Fix: Reset step, validation errors, and pending timers whenever the drawer closes
+  useEffect(() => {
+    if (!isOpen) {
+      if (completeTimerRef.current) {
+        clearTimeout(completeTimerRef.current);
+        completeTimerRef.current = null;
+      }
+      setStep('cart');
+      setStepValidationError(null);
+      setCheckoutError(null);
     }
+    return () => {
+      if (completeTimerRef.current) {
+        clearTimeout(completeTimerRef.current);
+        completeTimerRef.current = null;
+      }
+    };
+  }, [isOpen]);
+
+  // Sync B2B Tax ID / user details when authenticated user changes
+  useEffect(() => {
+    if (user?.tax_id) {
+      setCompanyTaxId(user.tax_id);
+    }
+    if (user?.first_name) {
+      setRecipientName(`${user.first_name} ${user.last_name || ''}`.trim());
+    }
+    if (user?.phone) {
+      setPhone(user.phone);
+    }
+  }, [user]);
+
+  // BUG-04 Fix: Apply B2B wholesale_price when user is a B2B company account
+  const subtotal = items.reduce(
+    (acc, item) => acc + getEffectiveUnitPrice(item.product, user) * item.quantity,
+    0
+  );
+  const freeShippingThreshold = 50000;
+  const shippingCost =
+    deliveryMethod === 'pickup' || subtotal >= freeShippingThreshold || subtotal === 0
+      ? 0
+      : 2500;
+  const grandTotal = subtotal + shippingCost;
+
+  const handleStartCheckout = () => {
+    setStepValidationError(null);
+    setCheckoutError(null);
+    setStep('shipping');
   };
 
-  const handlePlaceOrder = async (e: React.FormEvent) => {
+  // BUG-02 Fix: Strict form validation for Step 1 (Shipping)
+  const handleShippingSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!isAuthenticated || !accessToken) {
-      openAuthModal('login');
+    setStepValidationError(null);
+
+    if (recipientName.trim().length < 2) {
+      setStepValidationError('Please enter a valid recipient full name.');
+      return;
+    }
+    if (!PHONE_REGEX.test(phone.trim())) {
+      setStepValidationError('Please enter a valid phone number (e.g., +374 91 00-00-00).');
+      return;
+    }
+    if (deliveryMethod === 'express') {
+      if (city.trim().length < 2) {
+        setStepValidationError('Please enter a valid delivery city.');
+        return;
+      }
+      if (shippingAddress.trim().length < 4) {
+        setStepValidationError('Please enter a valid street delivery address.');
+        return;
+      }
+    }
+
+    setStep('payment');
+  };
+
+  // BUG-02 Fix: Strict form validation for Step 2 (Payment & 8-digit Armenian HVHH Tax ID)
+  const handlePaymentSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setStepValidationError(null);
+
+    if (paymentMethod === 'b2b_invoice') {
+      const cleanTaxId = companyTaxId.trim();
+      if (!ARMENIAN_HVHH_REGEX.test(cleanTaxId)) {
+        setStepValidationError(
+          'B2B Tax Invoice requires a strictly 8-digit Armenian HVHH Tax ID (e.g. 01234567).'
+        );
+        return;
+      }
+    }
+
+    setStep('review');
+  };
+
+  // BUG-03 Fix: Send actual cart items to API; check !response.ok and never wipe cart on error
+  const handlePlaceOrder = async () => {
+    setCheckoutError(null);
+    if (items.length === 0) {
+      setCheckoutError('Cannot place an order with an empty cart.');
       return;
     }
 
-    setCheckoutError(null);
     setIsSubmitting(true);
 
     try {
-      const response = await fetch('http://localhost:8000/api/v1/cart/checkout', {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (accessToken) {
+        headers.Authorization = `Bearer ${accessToken}`;
+      }
+
+      const payload = {
+        recipient_name: recipientName.trim(),
+        phone: phone.trim(),
+        city: city.trim(),
+        shipping_address:
+          deliveryMethod === 'pickup'
+            ? 'Warehouse Pickup (EVN-MAIN)'
+            : `${city.trim()}, ${shippingAddress.trim()}`,
+        zip_code: '0001',
+        delivery_method: deliveryMethod,
+        payment_method: paymentMethod,
+        company_tax_id: paymentMethod === 'b2b_invoice' ? companyTaxId.trim() : undefined,
+        items: items.map(({ product, quantity }) => ({
+          product_id: product.id,
+          sku: product.sku,
+          name: product.name,
+          unit_of_measure: product.unit_of_measure || 'հատ',
+          quantity,
+          unit_price: getEffectiveUnitPrice(product, user),
+        })),
+      };
+
+      const response = await fetch(`${API_BASE_URL}/cart/checkout`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`, // Bearer token kept strictly in memory
-        },
-        body: JSON.stringify({
-          shipping_address: shippingAddress,
-          zip_code: zipCode,
-          payment_method: 'card',
-        }),
+        headers,
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.detail || 'Failed to place order.');
+        let errorDetail = `Checkout failed with status ${response.status}.`;
+        try {
+          const errJson = await response.json();
+          if (typeof errJson.detail === 'string') {
+            errorDetail = errJson.detail;
+          } else if (Array.isArray(errJson.detail)) {
+            errorDetail = errJson.detail.map((d: any) => d.msg).join(', ');
+          }
+        } catch {
+          // Keep default status message
+        }
+        setCheckoutError(errorDetail);
+        return;
       }
 
       const orderData = await response.json();
-      setCompletedOrderNumber(orderData.order_number);
-      setOrderComplete(true);
-
-      setTimeout(() => {
-        onClearCart();
-        setIsCheckingOut(false);
-        setOrderComplete(false);
+      setCompletedOrderNumber(orderData.order_number || 'SURO-000001');
+      onClearCart();
+      setStep('complete');
+      if (completeTimerRef.current) {
+        clearTimeout(completeTimerRef.current);
+      }
+      completeTimerRef.current = setTimeout(() => {
+        setStep('cart');
         onClose();
-      }, 3500);
+      }, 3600);
     } catch (err: any) {
-      setCheckoutError(err.message || 'Checkout failed. Please try again.');
+      setCheckoutError(
+        err?.message || 'Unable to reach checkout server. Your cart items have been preserved.'
+      );
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  const stepsIndicator = [
+    { key: 'shipping', label: t('step1Shipping') },
+    { key: 'payment', label: t('step2Payment') },
+    { key: 'review', label: t('step3Review') },
+  ];
+
   return (
     <AnimatePresence>
       {isOpen && (
         <div className="fixed inset-0 z-50">
-          {/* Backdrop */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
-            className="fixed inset-0 bg-black/40 backdrop-blur-sm"
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm"
           />
 
-          {/* Slide-over panel */}
           <motion.div
             initial={{ x: '100%' }}
             animate={{ x: 0 }}
             exit={{ x: '100%' }}
             transition={{ type: 'spring', damping: 28, stiffness: 280 }}
-            className="fixed inset-y-0 right-0 flex w-full max-w-md flex-col bg-white shadow-2xl"
+            className={`fixed inset-y-0 right-0 flex w-full flex-col bg-white shadow-2xl transition-all duration-300 ${
+              isFullPage ? 'max-w-4xl' : 'max-w-md'
+            }`}
           >
-            {/* Header */}
-            <div className="flex items-center justify-between px-6 py-5 border-b border-neutral-100">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-bold uppercase tracking-wider text-neutral-900">
-                  {isCheckingOut ? 'Protected Checkout' : 'Shopping Cart'}
+            {/* Header Bar */}
+            <div className="flex items-center justify-between bg-[#0D5257] px-6 py-4 text-white">
+              <div className="flex items-center gap-2.5">
+                <span className="text-sm font-extrabold uppercase tracking-wider">
+                  {step === 'cart' ? t('shoppingCart') : t('checkoutTitle')}
                 </span>
-                <span className="text-xs text-neutral-400 font-mono">
-                  ({items.reduce((s, i) => s + i.quantity, 0)} items)
+                <span className="rounded-full bg-white/15 px-2.5 py-0.5 font-mono text-xs font-bold">
+                  {items.reduce((s, i) => s + i.quantity, 0)} {t('itemsCountUnit')}
                 </span>
               </div>
-              <button
-                type="button"
-                onClick={onClose}
-                className="rounded-full p-1.5 text-neutral-400 hover:text-black transition-colors"
-              >
-                <X className="h-5 w-5" />
-              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsFullPage((prev) => !prev)}
+                  className="rounded-lg bg-white/10 p-1.5 text-white hover:bg-white/20 transition-colors"
+                >
+                  {isFullPage ? (
+                    <Minimize2 className="h-4 w-4" />
+                  ) : (
+                    <Maximize2 className="h-4 w-4" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="rounded-lg bg-white/10 p-1.5 text-white hover:bg-white/20 transition-colors"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
             </div>
 
-            {orderComplete ? (
+            {step !== 'cart' && step !== 'complete' && (
+              <div className="grid grid-cols-3 bg-[#F5F7F8] px-6 py-3 border-b border-neutral-200/70">
+                {stepsIndicator.map((st) => {
+                  const active = step === st.key;
+                  return (
+                    <div
+                      key={st.key}
+                      className={`text-center text-xs font-extrabold ${
+                        active ? 'text-[#0D5257]' : 'text-neutral-400'
+                      }`}
+                    >
+                      {st.label}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {step === 'complete' ? (
               <div className="flex flex-1 flex-col items-center justify-center p-8 text-center">
                 <motion.div
                   initial={{ scale: 0 }}
@@ -163,264 +339,498 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 >
                   <CheckCircle2 className="h-16 w-16 text-emerald-600 mb-4" />
                 </motion.div>
-                <h3 className="text-lg font-bold text-neutral-900">Order Confirmed!</h3>
-                <p className="mt-1 text-xs font-mono font-bold text-neutral-700">
-                  Order #{completedOrderNumber || 'AUR-849201'}
+                <h3 className="text-xl font-black text-[#0B0F17]">{t('orderConfirmedTitle')}</h3>
+                <p className="mt-1 font-mono text-sm font-extrabold text-[#0D5257]">
+                  {t('orderNumberLabel')} #{completedOrderNumber}
                 </p>
-                <p className="mt-2 text-xs text-neutral-500 max-w-xs">
-                  Confirmation sent to{' '}
-                  <strong className="text-neutral-900">{user?.email}</strong>. Track your order anytime in your Profile.
+                <p className="mt-2 text-xs text-neutral-500 max-w-xs leading-relaxed">
+                  {t('orderConfirmedSub')}
                 </p>
               </div>
-            ) : isCheckingOut ? (
-              /* Strictly Protected Registered Checkout View */
-              <form onSubmit={handlePlaceOrder} className="flex flex-1 flex-col justify-between overflow-y-auto p-6">
+            ) : step === 'shipping' ? (
+              <form
+                onSubmit={handleShippingSubmit}
+                noValidate
+                className="flex flex-1 flex-col justify-between overflow-y-auto p-6"
+              >
                 <div className="space-y-4">
+                  <h3 className="text-base font-extrabold text-[#0B0F17]">
+                    {t('step1Shipping')}
+                  </h3>
+
+                  {stepValidationError && (
+                    <div className="flex items-start gap-2 rounded-xl bg-red-50 p-3 text-xs font-semibold text-red-700">
+                      <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                      <span>{stepValidationError}</span>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setDeliveryMethod('express')}
+                      className={`flex flex-col items-start rounded-xl p-3.5 text-left transition-all ${
+                        deliveryMethod === 'express'
+                          ? 'bg-[#0D5257] text-white shadow-sm'
+                          : 'bg-[#F5F7F8] text-[#0B0F17]'
+                      }`}
+                    >
+                      <span className="text-xs font-extrabold">{t('deliveryJobsite')}</span>
+                      <span
+                        className={`text-[11px] mt-0.5 ${
+                          deliveryMethod === 'express' ? 'text-white/80' : 'text-neutral-500'
+                        }`}
+                      >
+                        {subtotal >= freeShippingThreshold ? t('freeLabel') : '2,500 ֏'}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setDeliveryMethod('pickup')}
+                      className={`flex flex-col items-start rounded-xl p-3.5 text-left transition-all ${
+                        deliveryMethod === 'pickup'
+                          ? 'bg-[#0D5257] text-white shadow-sm'
+                          : 'bg-[#F5F7F8] text-[#0B0F17]'
+                      }`}
+                    >
+                      <span className="text-xs font-extrabold">{t('pickupWarehouse')}</span>
+                      <span
+                        className={`text-[11px] mt-0.5 ${
+                          deliveryMethod === 'pickup' ? 'text-white/80' : 'text-neutral-500'
+                        }`}
+                      >
+                        {t('freeToday')}
+                      </span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-neutral-500 mb-1">
+                        {t('recipientNameLabel')} *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={recipientName}
+                        onChange={(e) => setRecipientName(e.target.value)}
+                        className="w-full rounded-xl bg-[#F5F7F8] px-3.5 py-2.5 text-xs font-semibold text-[#0B0F17] outline-none focus:ring-2 focus:ring-[#0D5257]"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-neutral-500 mb-1">
+                        {t('phoneLabel')} *
+                      </label>
+                      <input
+                        type="tel"
+                        required
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        className="w-full rounded-xl bg-[#F5F7F8] px-3.5 py-2.5 text-xs font-semibold text-[#0B0F17] outline-none focus:ring-2 focus:ring-[#0D5257]"
+                      />
+                    </div>
+                  </div>
+
+                  {deliveryMethod === 'express' && (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold uppercase tracking-wider text-neutral-500 mb-1">
+                          {t('cityLabel')} *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={city}
+                          onChange={(e) => setCity(e.target.value)}
+                          className="w-full rounded-xl bg-[#F5F7F8] px-3.5 py-2.5 text-xs font-semibold text-[#0B0F17] outline-none focus:ring-2 focus:ring-[#0D5257]"
+                        />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <label className="block text-[11px] font-bold uppercase tracking-wider text-neutral-500 mb-1">
+                          {t('addressLabel')} *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={shippingAddress}
+                          onChange={(e) => setShippingAddress(e.target.value)}
+                          className="w-full rounded-xl bg-[#F5F7F8] px-3.5 py-2.5 text-xs font-semibold text-[#0B0F17] outline-none focus:ring-2 focus:ring-[#0D5257]"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="pt-6 flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStepValidationError(null);
+                      setStep('cart');
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#F5F7F8] px-4 py-3.5 text-xs font-bold text-neutral-700 hover:bg-neutral-200"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    <span>{t('backBtn')}</span>
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-[#DA291C] py-3.5 text-xs font-extrabold text-white shadow-md hover:bg-[#b82216]"
+                  >
+                    <span>{t('continueToPayment')}</span>
+                    <ArrowRight className="h-4 w-4" />
+                  </button>
+                </div>
+              </form>
+            ) : step === 'payment' ? (
+              <form
+                onSubmit={handlePaymentSubmit}
+                noValidate
+                className="flex flex-1 flex-col justify-between overflow-y-auto p-6"
+              >
+                <div className="space-y-4">
+                  <h3 className="text-base font-extrabold text-[#0B0F17]">
+                    {t('step2Payment')}
+                  </h3>
+
+                  {stepValidationError && (
+                    <div className="flex items-start gap-2 rounded-xl bg-red-50 p-3 text-xs font-semibold text-red-700">
+                      <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                      <span>{stepValidationError}</span>
+                    </div>
+                  )}
+
+                  <div className="space-y-2.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPaymentMethod('card');
+                        setStepValidationError(null);
+                      }}
+                      className={`flex w-full items-center justify-between rounded-xl p-4 text-left transition-all ${
+                        paymentMethod === 'card'
+                          ? 'bg-[#0D5257] text-white shadow-sm'
+                          : 'bg-[#F5F7F8] text-[#0B0F17]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <CreditCard className="h-5 w-5" />
+                        <div>
+                          <div className="text-xs font-extrabold">{t('payCard')}</div>
+                          <div
+                            className={`text-[11px] ${
+                              paymentMethod === 'card' ? 'text-white/80' : 'text-neutral-500'
+                            }`}
+                          >
+                            {t('payCardSub')}
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPaymentMethod('cash');
+                        setStepValidationError(null);
+                      }}
+                      className={`flex w-full items-center justify-between rounded-xl p-4 text-left transition-all ${
+                        paymentMethod === 'cash'
+                          ? 'bg-[#0D5257] text-white shadow-sm'
+                          : 'bg-[#F5F7F8] text-[#0B0F17]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <Banknote className="h-5 w-5" />
+                        <div>
+                          <div className="text-xs font-extrabold">{t('payCash')}</div>
+                          <div
+                            className={`text-[11px] ${
+                              paymentMethod === 'cash' ? 'text-white/80' : 'text-neutral-500'
+                            }`}
+                          >
+                            {t('payCashSub')}
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPaymentMethod('b2b_invoice');
+                        setStepValidationError(null);
+                      }}
+                      className={`flex w-full items-center justify-between rounded-xl p-4 text-left transition-all ${
+                        paymentMethod === 'b2b_invoice'
+                          ? 'bg-[#0D5257] text-white shadow-sm'
+                          : 'bg-[#F5F7F8] text-[#0B0F17]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <FileText className="h-5 w-5" />
+                        <div>
+                          <div className="text-xs font-extrabold">{t('payB2B')}</div>
+                          <div
+                            className={`text-[11px] ${
+                              paymentMethod === 'b2b_invoice' ? 'text-white/80' : 'text-neutral-500'
+                            }`}
+                          >
+                            {t('payB2BSub')}
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                  </div>
+
+                  {paymentMethod === 'b2b_invoice' && (
+                    <div className="rounded-xl bg-[#F5F7F8] p-4">
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-neutral-500 mb-1">
+                        {t('taxIdInputLabel')} (8 Digits) *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        maxLength={8}
+                        pattern="\d{8}"
+                        value={companyTaxId}
+                        onChange={(e) => setCompanyTaxId(e.target.value.replace(/\D/g, ''))}
+                        placeholder="01234567"
+                        className="w-full rounded-xl bg-white px-3.5 py-2.5 font-mono text-xs font-bold text-[#0B0F17] outline-none focus:ring-2 focus:ring-[#0D5257]"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div className="pt-6 flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStepValidationError(null);
+                      setStep('shipping');
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#F5F7F8] px-4 py-3.5 text-xs font-bold text-neutral-700 hover:bg-neutral-200"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    <span>{t('backBtn')}</span>
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-[#DA291C] py-3.5 text-xs font-extrabold text-white shadow-md hover:bg-[#b82216]"
+                  >
+                    <span>{t('reviewOrderBtn')}</span>
+                    <ArrowRight className="h-4 w-4" />
+                  </button>
+                </div>
+              </form>
+            ) : step === 'review' ? (
+              <div className="flex flex-1 flex-col justify-between overflow-y-auto p-6">
+                <div className="space-y-4">
+                  <h3 className="text-base font-extrabold text-[#0B0F17]">
+                    {t('step3Review')}
+                  </h3>
+
                   {checkoutError && (
-                    <div className="flex items-start gap-2 rounded-xl bg-red-50 p-3 text-xs text-red-700">
+                    <div className="flex items-start gap-2 rounded-xl bg-red-50 p-3 text-xs font-semibold text-red-700">
                       <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
                       <span>{checkoutError}</span>
                     </div>
                   )}
 
-                  {/* Authenticated User / B2B Profile Card */}
-                  <div className="rounded-2xl bg-neutral-50 p-4 border border-neutral-100 text-xs">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-400">
-                        Verified Account
+                  <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
+                    {items.map(({ product, quantity }) => {
+                      const effectiveUnitPrice = getEffectiveUnitPrice(product, user);
+                      return (
+                        <div
+                          key={product.id}
+                          className="flex items-center justify-between rounded-xl bg-[#F5F7F8] px-3.5 py-2.5 text-xs"
+                        >
+                          <div className="min-w-0 pr-3">
+                            <div className="truncate font-bold text-[#0B0F17]">{product.name}</div>
+                            <div className="font-mono text-[11px] text-neutral-500">
+                              {t('skuLabel')}: {product.sku} • {quantity}{' '}
+                              {translateUnit(product.unit_of_measure || 'հատ')}
+                            </div>
+                          </div>
+                          <span className="font-mono font-extrabold text-[#0B0F17] flex-shrink-0">
+                            {formatProductPrice(effectiveUnitPrice * quantity, product.currency)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="rounded-xl bg-[#0D5257]/5 p-4 space-y-2 text-xs">
+                    <div className="flex justify-between text-neutral-600">
+                      <span>{t('totalAmount')}</span>
+                      <span className="font-mono font-bold">{subtotal.toLocaleString()} ֏</span>
+                    </div>
+                    <div className="flex justify-between text-sm font-black text-[#0B0F17] pt-2 border-t border-neutral-200">
+                      <span>{t('confirmOrderBtn')}</span>
+                      <span className="font-mono text-base text-[#0D5257]">
+                        {grandTotal.toLocaleString()} ֏
                       </span>
-                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
-                        <ShieldCheck className="h-3 w-3" />
-                        Authenticated
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-2 font-bold text-neutral-900">
-                      {user?.account_type === 'company' ? (
-                        <>
-                          <Building2 className="h-4 w-4" />
-                          <span>{user.company_name}</span>
-                        </>
-                      ) : (
-                        <>
-                          <User className="h-4 w-4" />
-                          <span>{user?.first_name} {user?.last_name}</span>
-                        </>
-                      )}
-                    </div>
-                    <p className="text-neutral-500 mt-0.5">{user?.email}</p>
-                    {user?.account_type === 'company' && user.tax_id && (
-                      <p className="text-[11px] font-mono text-neutral-600 mt-1">
-                        Tax ID: {user.tax_id} (Commercial invoice attached)
-                      </p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-1">
-                      Delivery Destination
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="Street address"
-                      value={shippingAddress}
-                      onChange={(e) => setShippingAddress(e.target.value)}
-                      className="w-full rounded-xl bg-neutral-50 px-3.5 py-2.5 text-xs text-neutral-900 border-0 outline-none ring-1 ring-neutral-200/60 focus:bg-white focus:ring-2 focus:ring-black transition-all"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-1">
-                        Postal / ZIP Code
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={zipCode}
-                        onChange={(e) => setZipCode(e.target.value)}
-                        className="w-full rounded-xl bg-neutral-50 px-3.5 py-2.5 text-xs text-neutral-900 border-0 outline-none ring-1 ring-neutral-200/60 focus:bg-white focus:ring-2 focus:ring-black transition-all"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-1">
-                        Shipping Tier
-                      </label>
-                      <div className="rounded-xl bg-neutral-100 px-3 py-2.5 text-xs font-semibold text-neutral-800">
-                        {shipping === 0 ? 'Free Express' : 'Standard ($9.99)'}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Summary Box */}
-                  <div className="rounded-2xl bg-neutral-50 p-4 space-y-2 text-xs border border-neutral-100">
-                    <div className="flex justify-between text-neutral-500">
-                      <span>Subtotal</span>
-                      <span className="font-mono">${subtotal.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between text-neutral-500">
-                      <span>Automated Shipping</span>
-                      <span className="font-mono">{shipping === 0 ? 'FREE' : `$${shipping.toFixed(2)}`}</span>
-                    </div>
-                    <div className="flex justify-between text-neutral-500">
-                      <span>Estimated Tax (8.25%)</span>
-                      <span className="font-mono">${estimatedTax.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm font-bold text-neutral-900 pt-2 border-t border-neutral-200">
-                      <span>Total Amount</span>
-                      <span className="font-mono">${grandTotal.toFixed(2)}</span>
                     </div>
                   </div>
                 </div>
 
-                <div className="pt-6 space-y-2">
-                  <motion.button
-                    type="submit"
-                    disabled={isSubmitting}
-                    whileHover={{ y: -2 }}
-                    whileTap={{ scale: 0.98 }}
-                    className="w-full rounded-xl bg-black py-3.5 text-xs font-bold text-white shadow-md hover:bg-neutral-900 transition-all disabled:opacity-50"
-                  >
-                    {isSubmitting ? 'Processing Payment...' : `Authorize & Pay $${grandTotal.toFixed(2)}`}
-                  </motion.button>
+                <div className="pt-6 flex items-center gap-3">
                   <button
                     type="button"
-                    onClick={() => setIsCheckingOut(false)}
-                    className="w-full py-2 text-center text-xs font-medium text-neutral-500 hover:text-black"
+                    onClick={() => setStep('payment')}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#F5F7F8] px-4 py-3.5 text-xs font-bold text-neutral-700 hover:bg-neutral-200"
                   >
-                    Back to Items
+                    <ArrowLeft className="h-4 w-4" />
+                    <span>{t('backBtn')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isSubmitting}
+                    onClick={handlePlaceOrder}
+                    className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-[#DA291C] py-3.5 text-xs font-extrabold text-white shadow-md hover:bg-[#b82216] disabled:opacity-50"
+                  >
+                    <span>
+                      {t('confirmOrderBtn')} ({grandTotal.toLocaleString()} ֏)
+                    </span>
                   </button>
                 </div>
-              </form>
+              </div>
             ) : (
-              /* Cart Items List */
+              /* DEFAULT VIEW: CART ITEMS */
               <div className="flex flex-1 flex-col justify-between overflow-hidden">
                 {items.length === 0 ? (
                   <div className="flex flex-1 flex-col items-center justify-center p-8 text-center">
-                    <div className="h-12 w-12 rounded-2xl bg-neutral-100 flex items-center justify-center mb-3 text-neutral-400">
-                      <Truck className="h-6 w-6 stroke-1" />
+                    <div className="h-14 w-14 rounded-2xl bg-[#F5F7F8] flex items-center justify-center mb-3 text-[#0D5257]">
+                      <Truck className="h-7 w-7" />
                     </div>
-                    <p className="text-sm font-semibold text-neutral-900">Your cart is empty</p>
-                    <p className="mt-1 text-xs text-neutral-400">
-                      Explore professional power tools and hand equipment.
-                    </p>
+                    <p className="text-sm font-extrabold text-[#0B0F17]">{t('emptyCartTitle')}</p>
+                    <p className="mt-1 text-xs text-neutral-400">{t('emptyCartSubtitle')}</p>
                   </div>
                 ) : (
                   <div className="flex-1 overflow-y-auto p-6 space-y-4 divide-y divide-neutral-100">
-                    {/* Free shipping progress bar */}
-                    <div className="rounded-xl bg-neutral-50 p-3 text-xs">
+                    <div className="rounded-xl bg-[#F5F7F8] p-3.5 text-xs">
                       {subtotal >= freeShippingThreshold ? (
-                        <div className="flex items-center gap-1.5 text-emerald-700 font-medium">
+                        <div className="flex items-center gap-2 text-emerald-700 font-bold">
                           <Truck className="h-4 w-4" />
-                          <span>You qualified for Free Shipping!</span>
+                          <span>{t('freeShippingUnlocked')}</span>
                         </div>
                       ) : (
                         <div>
-                          <div className="flex justify-between text-neutral-600 mb-1">
-                            <span>Add ${(freeShippingThreshold - subtotal).toFixed(2)} for Free Shipping</span>
-                            <span>{Math.round((subtotal / freeShippingThreshold) * 100)}%</span>
+                          <div className="flex justify-between text-neutral-600 font-semibold mb-1.5">
+                            <span>
+                              {t('addMoreForFreeShipping')}{' '}
+                              {(freeShippingThreshold - subtotal).toLocaleString()} ֏
+                            </span>
+                            <span className="font-mono">
+                              {Math.round((subtotal / freeShippingThreshold) * 100)}%
+                            </span>
                           </div>
-                          <div className="h-1.5 w-full bg-neutral-200 rounded-full overflow-hidden">
+                          <div className="h-2 w-full bg-neutral-200 rounded-full overflow-hidden">
                             <div
-                              className="h-full bg-black transition-all"
-                              style={{ width: `${Math.min(100, (subtotal / freeShippingThreshold) * 100)}%` }}
+                              className="h-full bg-[#0D5257] transition-all"
+                              style={{
+                                width: `${Math.min(100, (subtotal / freeShippingThreshold) * 100)}%`,
+                              }}
                             />
                           </div>
                         </div>
                       )}
                     </div>
 
-                    {items.map(({ product, quantity }) => (
-                      <div key={product.id} className="pt-4 flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className="h-14 w-14 flex-shrink-0 rounded-xl bg-neutral-50 p-1">
-                            <img
-                              src={product.thumbnailUrl || product.imageUrl}
-                              alt={product.name}
-                              className="h-full w-full object-contain"
-                            />
-                          </div>
-                          <div className="min-w-0">
-                            <h4 className="truncate text-xs font-semibold text-neutral-900">
-                              {product.name}
-                            </h4>
-                            <p className="text-[11px] text-neutral-400">SKU: {product.sku}</p>
-                            <span className="text-xs font-bold text-neutral-900">
-                              ${product.price.toFixed(2)}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Quantity Controls & Remove */}
-                        <div className="flex items-center gap-3 flex-shrink-0">
-                          <div className="flex items-center rounded-lg border border-neutral-200">
-                            <button
-                              type="button"
-                              onClick={() => onUpdateQuantity(product.id, quantity - 1)}
-                              className="p-1 text-neutral-400 hover:text-black"
-                            >
-                              <Minus className="h-3 w-3" />
-                            </button>
-                            <span className="px-2 text-xs font-mono font-bold text-neutral-900">
-                              {quantity}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => onUpdateQuantity(product.id, quantity + 1)}
-                              className="p-1 text-neutral-400 hover:text-black"
-                            >
-                              <Plus className="h-3 w-3" />
-                            </button>
+                    {items.map(({ product, quantity }) => {
+                      const unitPrice = getEffectiveUnitPrice(product, user);
+                      return (
+                        <div
+                          key={product.id}
+                          className="pt-4 flex items-center justify-between gap-4"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="h-14 w-14 flex-shrink-0 overflow-hidden rounded-xl bg-[#F5F7F8] p-1">
+                              <img
+                                src={product.thumbnailUrl || product.imageUrl}
+                                alt={product.name}
+                                className="h-full w-full object-cover rounded-lg"
+                              />
+                            </div>
+                            <div className="min-w-0">
+                              <h4 className="truncate text-xs font-extrabold text-[#0B0F17]">
+                                {product.name}
+                              </h4>
+                              <p className="text-[11px] font-mono text-neutral-400">
+                                {t('skuLabel')}: {product.sku} •{' '}
+                                {formatProductPrice(unitPrice, product.currency)} /{' '}
+                                {translateUnit(product.unit_of_measure || 'հատ')}
+                              </p>
+                              <span className="text-xs font-black text-[#0D5257] tabular-nums">
+                                {formatProductPrice(unitPrice * quantity, product.currency)}
+                              </span>
+                            </div>
                           </div>
 
-                          <button
-                            type="button"
-                            onClick={() => onRemoveItem(product.id)}
-                            className="text-neutral-400 hover:text-red-500 transition-colors p-1"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
+                          <div className="flex items-center gap-2.5 flex-shrink-0">
+                            <div className="flex items-center rounded-xl bg-[#F5F7F8] p-1">
+                              <button
+                                type="button"
+                                onClick={() => onUpdateQuantity(product.id, quantity - 1)}
+                                className="p-1 text-neutral-600 hover:text-black"
+                              >
+                                <Minus className="h-3 w-3" />
+                              </button>
+                              <span className="px-2.5 text-xs font-mono font-extrabold text-[#0B0F17]">
+                                {quantity}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => onUpdateQuantity(product.id, quantity + 1)}
+                                className="p-1 text-neutral-600 hover:text-black"
+                              >
+                                <Plus className="h-3 w-3" />
+                              </button>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => onRemoveItem(product.id)}
+                              className="text-neutral-400 hover:text-[#DA291C] transition-colors p-1"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
 
-                {/* Footer Checkout Trigger - Strictly Protected */}
                 {items.length > 0 && (
-                  <div className="border-t border-neutral-100 p-6 space-y-3 bg-neutral-50/50">
-                    <div className="flex justify-between text-xs text-neutral-500">
-                      <span>Subtotal</span>
-                      <span className="font-mono font-bold text-neutral-900">
-                        ${subtotal.toFixed(2)}
+                  <div className="border-t border-neutral-100 p-6 space-y-3 bg-[#F5F7F8]/60">
+                    <div className="flex justify-between text-xs text-neutral-600">
+                      <span className="font-semibold">{t('totalAmount')}</span>
+                      <span className="font-mono text-base font-black text-[#0B0F17]">
+                        {subtotal.toLocaleString()} ֏
                       </span>
                     </div>
 
-                    <motion.button
+                    <button
                       type="button"
-                      whileHover={{ y: -2 }}
-                      whileTap={{ scale: 0.98 }}
-                      onClick={handleProceedToCheckout}
-                      className="flex w-full items-center justify-center gap-2 rounded-xl bg-black py-3.5 text-xs font-bold text-white shadow-md hover:bg-neutral-900 transition-all"
+                      onClick={handleStartCheckout}
+                      className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#DA291C] py-3.5 text-xs font-extrabold text-white shadow-md hover:bg-[#b82216] transition-all"
                     >
-                      {!isAuthenticated ? (
-                        <>
-                          <Lock className="h-3.5 w-3.5 text-neutral-400" />
-                          <span>Sign In to Checkout (Protected)</span>
-                        </>
-                      ) : (
-                        <>
-                          <span>Proceed to Checkout</span>
-                          <ArrowRight className="h-4 w-4" />
-                        </>
-                      )}
-                    </motion.button>
+                      <span>{t('proceedToCheckout')}</span>
+                      <ArrowRight className="h-4 w-4" />
+                    </button>
 
-                    <div className="flex items-center justify-center gap-1.5 text-[10px] text-neutral-400 pt-1">
-                      <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
-                      <span>{isAuthenticated ? 'Authenticated session' : 'Registered users only'} • OWASP fortified</span>
-                    </div>
+                    {!isAuthenticated && (
+                      <button
+                        type="button"
+                        onClick={() => openAuthModal('login')}
+                        className="flex w-full items-center justify-center gap-1.5 text-[11px] font-bold text-[#0D5257] hover:underline pt-1"
+                      >
+                        <Building2 className="h-3.5 w-3.5" />
+                        <span>{t('b2bLoginPrompt')}</span>
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

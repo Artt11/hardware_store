@@ -1,8 +1,12 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Heart, ShoppingBag, ShieldCheck, Truck, RefreshCw, ZoomIn } from 'lucide-react';
 import { Product } from '../../types/product';
 import { useWishlist } from '../../hooks/useWishlist';
+import { useAuth } from '../../context/AuthContext';
+import { useLanguage } from '../../context/LanguageContext';
+import { getEffectiveUnitPrice } from '../../config/api';
+import { formatProductPrice, getHighResFallbackImage } from './ProductCard';
 import { StickyCartBar } from './StickyCartBar';
 
 interface ProductDetailModalProps {
@@ -19,6 +23,8 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   onAddToCart,
 }) => {
   const { isInWishlist, toggleWishlist } = useWishlist();
+  const { user } = useAuth();
+  const { t, translateCategory, translateUnit } = useLanguage();
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
   const [isZoomed, setIsZoomed] = useState(false);
   const [zoomCoords, setZoomCoords] = useState({ x: 50, y: 50 });
@@ -26,24 +32,33 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const mainCtaRef = useRef<HTMLButtonElement>(null);
 
+  // ISSUE-09 Fix: Reset gallery index, zoom state, and sticky bar whenever selected product changes
+  useEffect(() => {
+    setSelectedImageIndex(0);
+    setIsZoomed(false);
+    setShowStickyBar(false);
+  }, [product?.id]);
+
+  // Deduplicated product-specific gallery (removes unrelated stock power-tool photos)
+  const gallery = useMemo(() => {
+    if (!product) return [];
+    const fallback = getHighResFallbackImage(product.sku);
+    const primary = product.image_url || product.imageUrl || fallback;
+    const thumb = product.thumbnailUrl || primary;
+    return Array.from(new Set([primary, thumb].filter(Boolean)));
+  }, [product]);
+
   if (!product) return null;
 
   const isSaved = isInWishlist(product.id);
+  const effectiveUnitPrice = getEffectiveUnitPrice(product, user);
+  const translatedUnit = translateUnit(product.unit_of_measure || 'հատ');
+  const translatedCategory = translateCategory(product.category || 'Uncategorized');
 
-  // High-res gallery images
-  const gallery = [
-    product.imageUrl,
-    product.thumbnailUrl,
-    'https://images.unsplash.com/photo-1572981779307-38b8cabb2407?auto=format&fit=crop&w=800&q=80',
-    'https://images.unsplash.com/photo-1581244277943-fe4a9c777189?auto=format&fit=crop&w=800&q=80',
-  ];
-
-  // Detect scroll to show sticky "Add to Cart" bar
   const handleScroll = () => {
     if (scrollContainerRef.current && mainCtaRef.current) {
       const ctaRect = mainCtaRef.current.getBoundingClientRect();
       const containerRect = scrollContainerRef.current.getBoundingClientRect();
-      // If main CTA has scrolled past the viewport of modal
       setShowStickyBar(ctaRect.bottom < containerRect.top);
     }
   };
@@ -54,6 +69,8 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     const y = ((e.clientY - top) / height) * 100;
     setZoomCoords({ x, y });
   };
+
+  const activeImage = gallery[selectedImageIndex] || gallery[0];
 
   return (
     <AnimatePresence>
@@ -78,8 +95,8 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
           >
             {/* Top Close Bar */}
             <div className="flex items-center justify-between border-b border-neutral-100 px-6 py-4">
-              <span className="text-xs font-mono uppercase tracking-widest text-neutral-400">
-                Aura Professional Series // {product.sku}
+              <span className="text-xs font-mono uppercase tracking-widest text-[#0D5257] font-bold">
+                {t('skuLabel')}: {product.sku} • {translatedCategory}
               </span>
               <button
                 type="button"
@@ -97,7 +114,6 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               className="flex-1 overflow-y-auto px-6 py-8"
             >
               <div className="grid grid-cols-1 gap-10 lg:grid-cols-2">
-                
                 {/* Left: High-Res Zoomable Gallery */}
                 <div className="flex flex-col gap-4">
                   <div
@@ -107,7 +123,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                     className="relative flex h-96 w-full items-center justify-center overflow-hidden rounded-2xl bg-neutral-50/70 p-6 cursor-crosshair border border-neutral-100"
                   >
                     <img
-                      src={gallery[selectedImageIndex]}
+                      src={activeImage}
                       alt={product.name}
                       className={`h-full w-full object-contain transition-transform duration-200 ${
                         isZoomed ? 'scale-150' : 'scale-100'
@@ -119,39 +135,38 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                       }
                     />
 
-                    {/* Floating Zoom Indicator */}
                     <div className="pointer-events-none absolute bottom-4 right-4 flex items-center gap-1.5 rounded-lg bg-white/80 px-2.5 py-1 text-[11px] font-medium text-neutral-600 backdrop-blur-sm shadow-sm">
                       <ZoomIn className="h-3.5 w-3.5" />
-                      <span>Hover to Zoom</span>
+                      <span>{t('quickView')}</span>
                     </div>
                   </div>
 
-                  {/* Thumbnail Strip */}
-                  <div className="flex gap-3 overflow-x-auto pb-2">
-                    {gallery.map((img, idx) => (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={() => setSelectedImageIndex(idx)}
-                        className={`h-16 w-16 flex-shrink-0 rounded-xl bg-neutral-50 p-1.5 border transition-all ${
-                          selectedImageIndex === idx
-                            ? 'border-black ring-2 ring-black/10'
-                            : 'border-neutral-200 hover:border-neutral-300'
-                        }`}
-                      >
-                        <img src={img} alt="" className="h-full w-full object-contain" />
-                      </button>
-                    ))}
-                  </div>
+                  {gallery.length > 1 && (
+                    <div className="flex gap-3 overflow-x-auto pb-2">
+                      {gallery.map((img, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => setSelectedImageIndex(idx)}
+                          className={`h-16 w-16 flex-shrink-0 rounded-xl bg-neutral-50 p-1.5 border transition-all ${
+                            selectedImageIndex === idx
+                              ? 'border-[#0D5257] ring-2 ring-[#0D5257]/10'
+                              : 'border-neutral-200 hover:border-neutral-300'
+                          }`}
+                        >
+                          <img src={img} alt="" className="h-full w-full object-contain" />
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Right: Product Specs & Purchase Column */}
                 <div className="flex flex-col justify-between">
                   <div>
-                    {/* Brand & Stock Pill */}
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold uppercase tracking-widest text-neutral-400">
-                        {product.brand}
+                      <span className="text-xs font-bold uppercase tracking-widest text-[#0D5257]">
+                        {translatedCategory}
                       </span>
                       <span
                         className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
@@ -160,8 +175,14 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                             : 'bg-neutral-100 text-neutral-500'
                         }`}
                       >
-                        <span className={`h-1.5 w-1.5 rounded-full ${product.inStock ? 'bg-emerald-500' : 'bg-neutral-400'}`} />
-                        {product.inStock ? `In Stock (${product.stockQuantity} units)` : 'Backordered'}
+                        <span
+                          className={`h-1.5 w-1.5 rounded-full ${
+                            product.inStock ? 'bg-emerald-500' : 'bg-neutral-400'
+                          }`}
+                        />
+                        {product.inStock
+                          ? `${t('inStockWarehouse')} (${product.stockQuantity})`
+                          : t('outOfStock')}
                       </span>
                     </div>
 
@@ -172,33 +193,30 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                     <p className="mt-3 text-sm text-neutral-600 leading-relaxed">
                       {product.description ||
                         product.shortDescription ||
-                        `Կոդ: ${product.sku} • Չափման միավոր: ${product.unit_of_measure || 'հատ'}${
-                          product.barcode ? ` • Գծիկավոր կոդ: ${product.barcode}` : ''
+                        `${t('skuLabel')}: ${product.sku} • ${t('unitOfMeasureLabel')}: ${translatedUnit}${
+                          product.barcode ? ` • ${t('barcodeLabel')}: ${product.barcode}` : ''
                         }`}
                     </p>
 
-                    {/* Price Header (Displays retail_price by default) */}
+                    {/* Price Header */}
                     <div className="mt-6 flex flex-col gap-1">
                       <div className="flex items-baseline gap-3">
-                        <span className="text-3xl font-extrabold text-neutral-900">
-                          {product.currency === 'AMD'
-                            ? `${Number(product.retail_price ?? product.price).toLocaleString('en-US', { maximumFractionDigits: 0 })} ֏`
-                            : `$${Number(product.retail_price ?? product.price).toFixed(2)}`}
+                        <span className="text-3xl font-extrabold text-neutral-900 font-mono">
+                          {formatProductPrice(effectiveUnitPrice, product.currency)}
                         </span>
                         <span className="text-sm font-medium text-neutral-400">
-                          / {product.unit_of_measure || 'հատ'}
+                          / {translatedUnit}
                         </span>
-                        {product.compareAtPrice && product.compareAtPrice > (product.retail_price ?? product.price) && (
-                          <span className="text-base text-neutral-400 line-through">
-                            {product.currency === 'AMD'
-                              ? `${product.compareAtPrice.toLocaleString('en-US', { maximumFractionDigits: 0 })} ֏`
-                              : `$${product.compareAtPrice.toFixed(2)}`}
+                        {product.compareAtPrice && product.compareAtPrice > effectiveUnitPrice && (
+                          <span className="text-base text-neutral-400 line-through font-mono">
+                            {formatProductPrice(product.compareAtPrice, product.currency)}
                           </span>
                         )}
                       </div>
                       {product.wholesale_price > 0 && (
-                        <span className="text-xs font-semibold text-neutral-500">
-                          Մեծածախ գին՝ {Number(product.wholesale_price).toLocaleString('en-US', { maximumFractionDigits: 0 })} ֏
+                        <span className="text-xs font-semibold text-[#0D5257]">
+                          {t('wholesalePriceLabel')}:{' '}
+                          {formatProductPrice(product.wholesale_price, product.currency)}
                         </span>
                       )}
                     </div>
@@ -206,18 +224,28 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                     {/* Technical Specification Table */}
                     <div className="mt-8 rounded-2xl bg-neutral-50 p-5 border border-neutral-100">
                       <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-3">
-                        Technical Specifications
+                        {t('techSpecs')}
                       </h4>
-                      <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5 text-xs">
-                        {Object.entries(product.specifications).map(([key, val]) => (
-                          <div key={key} className="flex justify-between border-b border-neutral-200/60 pb-1.5">
-                            <dt className="text-neutral-500 capitalize">{key.replace('_', ' ')}</dt>
-                            <dd className="font-semibold text-neutral-900">{val}</dd>
-                          </div>
-                        ))}
+                      <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2.5 text-xs">
                         <div className="flex justify-between border-b border-neutral-200/60 pb-1.5">
-                          <dt className="text-neutral-500">Warranty</dt>
-                          <dd className="font-semibold text-neutral-900">3-Year Limited</dd>
+                          <dt className="text-neutral-500">{t('skuLabel')}</dt>
+                          <dd className="font-mono font-semibold text-neutral-900">{product.sku}</dd>
+                        </div>
+                        <div className="flex justify-between border-b border-neutral-200/60 pb-1.5">
+                          <dt className="text-neutral-500">{t('unitOfMeasureLabel')}</dt>
+                          <dd className="font-semibold text-neutral-900">{translatedUnit}</dd>
+                        </div>
+                        {product.barcode && (
+                          <div className="flex justify-between border-b border-neutral-200/60 pb-1.5">
+                            <dt className="text-neutral-500">{t('barcodeLabel')}</dt>
+                            <dd className="font-mono font-semibold text-neutral-900">
+                              {product.barcode}
+                            </dd>
+                          </div>
+                        )}
+                        <div className="flex justify-between border-b border-neutral-200/60 pb-1.5">
+                          <dt className="text-neutral-500">{t('warranty')}</dt>
+                          <dd className="font-semibold text-neutral-900">{t('warrantyVal')}</dd>
                         </div>
                       </dl>
                     </div>
@@ -225,16 +253,16 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                     {/* Trust Badges */}
                     <div className="mt-6 grid grid-cols-3 gap-3 border-t border-neutral-100 pt-5 text-center text-[11px] text-neutral-500">
                       <div className="flex flex-col items-center gap-1">
-                        <Truck className="h-4 w-4 text-black" />
-                        <span>Free 2-Day Shipping</span>
+                        <Truck className="h-4 w-4 text-[#0D5257]" />
+                        <span>{t('footerFastDelivery')}</span>
                       </div>
                       <div className="flex flex-col items-center gap-1">
-                        <ShieldCheck className="h-4 w-4 text-black" />
-                        <span>Guaranteed Authentic</span>
+                        <ShieldCheck className="h-4 w-4 text-[#0D5257]" />
+                        <span>{t('vatIncluded')}</span>
                       </div>
                       <div className="flex flex-col items-center gap-1">
-                        <RefreshCw className="h-4 w-4 text-black" />
-                        <span>30-Day Hassle Free</span>
+                        <RefreshCw className="h-4 w-4 text-[#0D5257]" />
+                        <span>{t('footerB2BTitle')}</span>
                       </div>
                     </div>
                   </div>
@@ -246,16 +274,13 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                       type="button"
                       disabled={!product.inStock}
                       onClick={() => onAddToCart(product)}
-                      whileHover={{ scale: 1.02 }}
+                      whileHover={{ scale: 1.01 }}
                       whileTap={{ scale: 0.98 }}
-                      className="flex-1 flex h-12 items-center justify-center gap-2 rounded-xl bg-black text-xs font-bold text-white shadow-md hover:bg-neutral-900 transition-all disabled:bg-neutral-200 disabled:text-neutral-400"
+                      className="flex-1 flex h-12 items-center justify-center gap-2 rounded-xl bg-[#DA291C] text-xs font-extrabold text-white shadow-md hover:bg-[#b82216] transition-all disabled:bg-neutral-200 disabled:text-neutral-400"
                     >
                       <ShoppingBag className="h-4 w-4" />
                       <span>
-                        Add to Cart —{' '}
-                        {product.currency === 'AMD'
-                          ? `${Number(product.retail_price ?? product.price).toLocaleString('en-US', { maximumFractionDigits: 0 })} ֏`
-                          : `$${Number(product.retail_price ?? product.price).toFixed(2)}`}
+                        {t('addToCart')} — {formatProductPrice(effectiveUnitPrice, product.currency)}
                       </span>
                     </motion.button>
 
@@ -273,11 +298,9 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                     </motion.button>
                   </div>
                 </div>
-
               </div>
             </div>
 
-            {/* Sticky Cart Bar when user scrolls past the main CTA */}
             <StickyCartBar
               product={product}
               visible={showStickyBar}

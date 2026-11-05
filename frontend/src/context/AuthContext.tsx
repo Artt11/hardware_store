@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { UserProfile, RegisterFormData } from '../types/user';
+import { API_BASE_URL } from '../config/api';
 
 interface AuthContextType {
   user: UserProfile | null;
@@ -16,7 +17,7 @@ interface AuthContextType {
   setAuthModalMode: (mode: 'login' | 'register') => void;
 }
 
-const API_BASE = 'http://localhost:8000/api/v1';
+const API_BASE = API_BASE_URL;
 const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes auto-timeout
 
 export const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -33,7 +34,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const postAuthActionRef = useRef<(() => void) | null>(null);
   
   // Inactivity tracking timer
-  const inactivityTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 1. Silent Token Refresh (Runs on app boot to exchange HttpOnly cookie for in-memory token)
   const silentRefresh = useCallback(async (): Promise<string | null> => {
@@ -76,25 +77,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     silentRefresh();
   }, [silentRefresh]);
 
-  // 2. Inactivity Auto-Timeout (Locks session after 15 min of idle)
+  // 2. Inactivity Auto-Timeout (ISSUE-10 Fix: Non-blocking modal re-auth instead of window.alert)
   const resetInactivityTimer = useCallback(() => {
     if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
     if (!accessToken) return;
 
     inactivityTimerRef.current = setTimeout(() => {
-      console.warn('Session timed out due to user inactivity.');
       setAccessToken(null);
       setUser(null);
-      alert('Your session has timed out due to inactivity for security. Please sign in again.');
+      setAuthModalMode('login');
+      setIsAuthModalOpen(true);
     }, INACTIVITY_TIMEOUT_MS);
   }, [accessToken]);
 
   useEffect(() => {
     if (!accessToken) return;
-    const events = ['mousedown', 'keydown', 'scroll', 'touchstart'];
+    const events: Array<keyof WindowEventMap> = ['mousedown', 'keydown', 'scroll', 'touchstart'];
     const handleActivity = () => resetInactivityTimer();
+    const listenerOptions: AddEventListenerOptions = { passive: true };
     
-    events.forEach((ev) => window.addEventListener(ev, handleActivity));
+    events.forEach((ev) => window.addEventListener(ev, handleActivity, listenerOptions));
     resetInactivityTimer();
 
     return () => {
@@ -192,16 +194,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const openAuthModal = (mode: 'login' | 'register' = 'login', onComplete?: () => void) => {
+  const openAuthModal = useCallback((mode: 'login' | 'register' = 'login', onComplete?: () => void) => {
     setAuthModalMode(mode);
     if (onComplete) postAuthActionRef.current = onComplete;
     setIsAuthModalOpen(true);
-  };
+  }, []);
 
-  const closeAuthModal = () => {
+  const closeAuthModal = useCallback(() => {
     setIsAuthModalOpen(false);
     postAuthActionRef.current = null;
-  };
+  }, []);
 
   return (
     <AuthContext.Provider
