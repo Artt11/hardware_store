@@ -11,7 +11,6 @@ import {
   ArrowLeft,
   Truck,
   CheckCircle2,
-  Building2,
   CreditCard,
   Banknote,
   FileText,
@@ -52,18 +51,20 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   onRemoveItem,
   onClearCart,
 }) => {
-  const { isAuthenticated, user, accessToken, openAuthModal } = useAuth();
+  const { user, accessToken } = useAuth();
   const { t, translateUnit } = useLanguage();
 
   const [step, setStep] = useState<CheckoutStep>('cart');
   const [isFullPage, setIsFullPage] = useState<boolean>(false);
 
   const [recipientName, setRecipientName] = useState(
-    user?.first_name ? `${user.first_name} ${user.last_name || ''}`.trim() : 'Արմեն Հակոբյան'
+    user?.first_name
+      ? `${user.first_name} ${user.last_name || ''}`.trim()
+      : `${t('auth.first_name_placeholder')} ${t('auth.last_name_placeholder')}`
   );
   const [phone, setPhone] = useState(user?.phone || '+374 91 00-00-00');
-  const [city, setCity] = useState('Երևան');
-  const [shippingAddress, setShippingAddress] = useState('Արշակունյաց պող. 24');
+  const [city, setCity] = useState(t('checkout.default_city'));
+  const [shippingAddress, setShippingAddress] = useState('');
   const [deliveryMethod, setDeliveryMethod] = useState<'express' | 'pickup'>('express');
 
   const [paymentMethod, setPaymentMethod] = useState<'card' | 'cash' | 'b2b_invoice'>('card');
@@ -125,26 +126,26 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
     setStep('shipping');
   };
 
-  // BUG-02 Fix: Strict form validation for Step 1 (Shipping)
+  // BUG-02 Fix: Strict form validation for Step 1 (Shipping) using localized error messages
   const handleShippingSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setStepValidationError(null);
 
     if (recipientName.trim().length < 2) {
-      setStepValidationError('Please enter a valid recipient full name.');
+      setStepValidationError(t('errors.invalid_recipient'));
       return;
     }
     if (!PHONE_REGEX.test(phone.trim())) {
-      setStepValidationError('Please enter a valid phone number (e.g., +374 91 00-00-00).');
+      setStepValidationError(t('errors.invalid_phone'));
       return;
     }
     if (deliveryMethod === 'express') {
       if (city.trim().length < 2) {
-        setStepValidationError('Please enter a valid delivery city.');
+        setStepValidationError(t('errors.invalid_city'));
         return;
       }
       if (shippingAddress.trim().length < 4) {
-        setStepValidationError('Please enter a valid street delivery address.');
+        setStepValidationError(t('errors.invalid_address'));
         return;
       }
     }
@@ -160,9 +161,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
     if (paymentMethod === 'b2b_invoice') {
       const cleanTaxId = companyTaxId.trim();
       if (!ARMENIAN_HVHH_REGEX.test(cleanTaxId)) {
-        setStepValidationError(
-          'B2B Tax Invoice requires a strictly 8-digit Armenian HVHH Tax ID (e.g. 01234567).'
-        );
+        setStepValidationError(t('errors.invalid_hvhh'));
         return;
       }
     }
@@ -174,7 +173,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   const handlePlaceOrder = async () => {
     setCheckoutError(null);
     if (items.length === 0) {
-      setCheckoutError('Cannot place an order with an empty cart.');
+      setCheckoutError(t('errors.empty_cart_checkout'));
       return;
     }
 
@@ -194,7 +193,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
         city: city.trim(),
         shipping_address:
           deliveryMethod === 'pickup'
-            ? 'Warehouse Pickup (EVN-MAIN)'
+            ? t('cart.warehouse_pickup_address')
             : `${city.trim()}, ${shippingAddress.trim()}`,
         zip_code: '0001',
         delivery_method: deliveryMethod,
@@ -217,7 +216,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       });
 
       if (!response.ok) {
-        let errorDetail = `Checkout failed with status ${response.status}.`;
+        let errorDetail = t('errors.checkout_status', { status: response.status });
         try {
           const errJson = await response.json();
           if (typeof errJson.detail === 'string') {
@@ -226,7 +225,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             errorDetail = errJson.detail.map((d: any) => d.msg).join(', ');
           }
         } catch {
-          // Keep default status message
+          // Keep default localized status message
         }
         setCheckoutError(errorDetail);
         return;
@@ -244,9 +243,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
         onClose();
       }, 3600);
     } catch (err: any) {
-      setCheckoutError(
-        err?.message || 'Unable to reach checkout server. Your cart items have been preserved.'
-      );
+      setCheckoutError(err?.message || t('errors.checkout_network'));
     } finally {
       setIsSubmitting(false);
     }
@@ -304,6 +301,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 </button>
                 <button
                   type="button"
+                  aria-label={t('catalog.close_modal')}
                   onClick={onClose}
                   className="rounded-lg bg-white/10 p-1.5 text-white hover:bg-white/20 transition-colors"
                 >
@@ -453,6 +451,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                         <input
                           type="text"
                           required
+                          placeholder={t('checkout.manual_address_placeholder')}
                           value={shippingAddress}
                           onChange={(e) => setShippingAddress(e.target.value)}
                           className="w-full rounded-xl bg-[#F5F7F8] px-3.5 py-2.5 text-xs font-semibold text-[#0B0F17] outline-none focus:ring-2 focus:ring-[#0D5257]"
@@ -587,7 +586,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                   {paymentMethod === 'b2b_invoice' && (
                     <div className="rounded-xl bg-[#F5F7F8] p-4">
                       <label className="block text-[11px] font-bold uppercase tracking-wider text-neutral-500 mb-1">
-                        {t('taxIdInputLabel')} (8 Digits) *
+                        {t('taxIdInputLabel')} ({t('cart.digits_hint')}) *
                       </label>
                       <input
                         type="text"
@@ -772,6 +771,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                             <div className="flex items-center rounded-xl bg-[#F5F7F8] p-1">
                               <button
                                 type="button"
+                                aria-label={t('catalog.qty_decrease')}
                                 onClick={() => onUpdateQuantity(product.id, quantity - 1)}
                                 className="p-1 text-neutral-600 hover:text-black"
                               >
@@ -782,6 +782,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                               </span>
                               <button
                                 type="button"
+                                aria-label={t('catalog.qty_increase')}
                                 onClick={() => onUpdateQuantity(product.id, quantity + 1)}
                                 className="p-1 text-neutral-600 hover:text-black"
                               >
@@ -791,6 +792,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
                             <button
                               type="button"
+                              aria-label={t('cart.remove_item')}
                               onClick={() => onRemoveItem(product.id)}
                               className="text-neutral-400 hover:text-[#DA291C] transition-colors p-1"
                             >
@@ -804,10 +806,12 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 )}
 
                 {items.length > 0 && (
-                  <div className="border-t border-neutral-100 p-6 space-y-3 bg-[#F5F7F8]/60">
-                    <div className="flex justify-between text-xs text-neutral-600">
-                      <span className="font-semibold">{t('totalAmount')}</span>
-                      <span className="font-mono text-base font-black text-[#0B0F17]">
+                  <div className="border-t border-neutral-100 bg-[#F5F7F8] p-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <span className="text-xs font-extrabold uppercase tracking-wider text-neutral-500">
+                        {t('totalAmount')}
+                      </span>
+                      <span className="text-xl font-black text-[#0B0F17] font-mono tabular-nums">
                         {subtotal.toLocaleString()} ֏
                       </span>
                     </div>
@@ -815,22 +819,11 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                     <button
                       type="button"
                       onClick={handleStartCheckout}
-                      className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#DA291C] py-3.5 text-xs font-extrabold text-white shadow-md hover:bg-[#b82216] transition-all"
+                      className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#DA291C] py-4 text-xs font-extrabold text-white shadow-lg hover:bg-[#b82216] transition-all"
                     >
                       <span>{t('proceedToCheckout')}</span>
                       <ArrowRight className="h-4 w-4" />
                     </button>
-
-                    {!isAuthenticated && (
-                      <button
-                        type="button"
-                        onClick={() => openAuthModal('login')}
-                        className="flex w-full items-center justify-center gap-1.5 text-[11px] font-bold text-[#0D5257] hover:underline pt-1"
-                      >
-                        <Building2 className="h-3.5 w-3.5" />
-                        <span>{t('b2bLoginPrompt')}</span>
-                      </button>
-                    )}
                   </div>
                 )}
               </div>

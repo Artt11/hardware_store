@@ -201,11 +201,18 @@ export const Header: React.FC<HeaderProps> = ({
 
           <div className="flex items-center gap-3 sm:gap-4">
             <a
-              href="tel:+37410550000"
+              href="tel:+37494556867"
               className="hidden sm:inline-flex items-center gap-1 font-mono font-semibold text-white hover:text-[#FFAB00] transition-colors"
             >
               <Phone className="h-3 w-3" />
-              <span>+374 (10) 55-00-00</span>
+              <span>+374 94 55-68-67</span>
+            </a>
+            <a
+              href="tel:+37493311171"
+              className="hidden lg:inline-flex items-center gap-1 font-mono font-semibold text-white hover:text-[#FFAB00] transition-colors"
+            >
+              <Phone className="h-3 w-3" />
+              <span>+374 93 31-11-71</span>
             </a>
 
             {/* Trilingual Switcher Pill: ARM | RUS | ENG */}
@@ -261,12 +268,19 @@ export const Header: React.FC<HeaderProps> = ({
               }}
               className="group flex items-center gap-2.5 text-white transition-opacity hover:opacity-95"
             >
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#DA291C] text-white font-black text-lg tracking-tighter shadow-sm">
-                Ս
+              <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl bg-[#FFAB00] text-[#0B0F17] font-black text-lg tracking-tighter shadow-sm">
+                <img
+                  src="/logo.jpg.jpg"
+                  alt="LAVNA"
+                  className="h-full w-full object-cover"
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).style.display = 'none';
+                  }}
+                />
               </div>
               <div className="flex flex-col">
                 <span className="text-lg sm:text-xl font-black tracking-tight leading-none">
-                  SURO<span className="font-light text-[#FFAB00]">BUILD</span>
+                  LAVNA<span className="font-light text-[#FFAB00]">BUILD</span>
                 </span>
                 <span className="text-[10px] font-medium uppercase tracking-widest text-white/70 mt-0.5">
                   {t('brandTagline')}

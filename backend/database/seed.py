@@ -38,6 +38,8 @@ SCHEMA_SQL_PATH = BASE_DIR / "schema.sql"
 MIGRATION_SQL_PATH = BASE_DIR / "migrations" / "001_products_schema.sql"
 
 DEFAULT_EXCEL_CANDIDATES = [
+    BASE_DIR / "Լավնա.xlsx",
+    PROJECT_ROOT / "Լավնա.xlsx",
     PROJECT_ROOT / "Products.xlsx",
     PROJECT_ROOT / "Products Սուրո.xlsx",
     BASE_DIR / "Products.xlsx",

@@ -2,6 +2,8 @@ import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ShoppingBag, Check } from 'lucide-react';
 import { Product } from '../../types/product';
+import { useLanguage } from '../../context/LanguageContext';
+import { formatProductPrice } from './ProductCard';
 
 interface StickyCartBarProps {
   product: Product | null;
@@ -14,6 +16,7 @@ export const StickyCartBar: React.FC<StickyCartBarProps> = ({
   visible,
   onAddToCart,
 }) => {
+  const { t, translateCategory } = useLanguage();
   const [justAdded, setJustAdded] = React.useState(false);
 
   if (!product) return null;
@@ -46,7 +49,7 @@ export const StickyCartBar: React.FC<StickyCartBarProps> = ({
               </div>
               <div className="min-w-0">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
-                  {product.brand}
+                  {translateCategory(product.category || product.brand)}
                 </span>
                 <h4 className="truncate text-xs sm:text-sm font-semibold text-neutral-900 max-w-xs sm:max-w-md">
                   {product.name}
@@ -54,14 +57,19 @@ export const StickyCartBar: React.FC<StickyCartBarProps> = ({
               </div>
             </div>
 
-            {/* Right: Price & Antigravity Add to Cart CTA */}
+            {/* Right: Price & Add to Cart CTA */}
             <div className="flex items-center gap-4 flex-shrink-0">
               <div className="text-right">
-                <div className="text-sm sm:text-base font-extrabold text-neutral-900">
-                  ${product.price.toFixed(2)}
+                <div className="text-sm sm:text-base font-extrabold text-neutral-900 font-mono tabular-nums">
+                  {formatProductPrice(
+                    typeof product.retail_price === 'number'
+                      ? product.retail_price
+                      : product.price,
+                    product.currency
+                  )}
                 </div>
                 <div className="text-[10px] text-emerald-600 font-medium">
-                  {product.inStock ? 'Ready to Ship' : 'Out of Stock'}
+                  {product.inStock ? t('catalog.ready_to_ship') : t('catalog.out_of_stock')}
                 </div>
               </div>
 
@@ -80,12 +88,12 @@ export const StickyCartBar: React.FC<StickyCartBarProps> = ({
                 {justAdded ? (
                   <>
                     <Check className="h-4 w-4 stroke-[2.5]" />
-                    <span>Added</span>
+                    <span>{t('addedToCart')}</span>
                   </>
                 ) : (
                   <>
                     <ShoppingBag className="h-4 w-4" />
-                    <span>Add to Cart</span>
+                    <span>{t('addToCart')}</span>
                   </>
                 )}
               </motion.button>

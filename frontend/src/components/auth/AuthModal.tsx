@@ -2,100 +2,16 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Building2, User, Lock, Mail, ShieldCheck, AlertCircle, Loader2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { useLanguage, Language } from '../../context/LanguageContext';
+import { useLanguage } from '../../context/LanguageContext';
 import { AccountType, RegisterFormData } from '../../types/user';
 
 const ARMENIAN_HVHH_REGEX = /^\d{8}$/;
 
-const AUTH_LABELS: Record<Language, Record<string, string>> = {
-  hy: {
-    securityBadge: 'Սուրո Անվտանգություն // Պաշտպանված Մուտք',
-    signInTitle: 'Մուտք գործել «Սուրո» հարթակ',
-    registerTitle: 'Ստեղծել Նոր Հաշիվ',
-    individualTab: 'Ֆիզիկական անձ (B2C)',
-    companyTab: 'Կազմակերպություն (B2B)',
-    firstName: 'Անուն',
-    lastName: 'Ազգանուն',
-    companyName: 'Կազմակերպության Անվանում',
-    taxId: 'ՀՎՀՀ (8 նիշ)',
-    contactPerson: 'Պատասխանատու Անձ',
-    phone: 'Հեռախոսահամար',
-    email: 'Էլ. հասցե',
-    password: 'Գաղտնաբառ',
-    passwordHint: 'Նվազագույնը 8 նիշ (տառեր և թվեր)։',
-    signInBtn: 'Մուտք Գործել',
-    registerB2BBtn: 'Գրանցել B2B Կազմակերպություն',
-    registerB2CBtn: 'Գրանցել Անհատական Հաշիվ',
-    demoTitle: 'Արագ Դեմո Մուտք (Թեստավորման համար)՝',
-    demoB2C: 'Անհատական (B2C) Դեմո',
-    demoB2B: 'Կազմակերպություն (B2B) Դեմո',
-    noAccount: 'Չունե՞ք հաշիվ։',
-    createNow: 'Գրանցվել հիմա',
-    hasAccount: 'Արդեն ունե՞ք հաշիվ։',
-    signInLink: 'Մուտք գործել',
-    invalidTaxId: 'Կազմակերպության ՀՎՀՀ-ն պետք է բաղկացած լինի ուղիղ 8 թվանշանից (օր.՝ 01234567)։',
-  },
-  ru: {
-    securityBadge: 'Суро Безопасность // Защищенный Вход',
-    signInTitle: 'Вход на платформу «Суро»',
-    registerTitle: 'Создать Новый Аккаунт',
-    individualTab: 'Физ. лицо (B2C)',
-    companyTab: 'Организация (B2B)',
-    firstName: 'Имя',
-    lastName: 'Фамилия',
-    companyName: 'Название Организации',
-    taxId: 'ИНН / ՀՎՀՀ (8 цифр)',
-    contactPerson: 'Контактное Лицо',
-    phone: 'Номер телефона',
-    email: 'Эл. почта',
-    password: 'Пароль',
-    passwordHint: 'Минимум 8 символов (буквы и цифры).',
-    signInBtn: 'Войти в Кабинет',
-    registerB2BBtn: 'Зарегистрировать B2B Компанию',
-    registerB2CBtn: 'Зарегистрировать Аккаунт',
-    demoTitle: 'Быстрый Демо-Вход (для проверки):',
-    demoB2C: 'Физ. лицо (B2C) Демо',
-    demoB2B: 'Компания (B2B) Демо',
-    noAccount: 'Нет аккаунта?',
-    createNow: 'Зарегистрироваться',
-    hasAccount: 'Уже есть аккаунт?',
-    signInLink: 'Войти',
-    invalidTaxId: 'ИНН организации (ՀՎՀՀ) должен состоять ровно из 8 цифр (напр. 01234567).',
-  },
-  en: {
-    securityBadge: 'Suro Security // Zero-Trust Auth',
-    signInTitle: 'Sign in to SuroBuild',
-    registerTitle: 'Create an Account',
-    individualTab: 'Individual (B2C)',
-    companyTab: 'Company (B2B)',
-    firstName: 'First Name',
-    lastName: 'Last Name',
-    companyName: 'Company Legal Name',
-    taxId: 'Tax ID / ՀՎՀՀ (8 digits)',
-    contactPerson: 'Authorized Contact',
-    phone: 'Business Phone',
-    email: 'Email Address',
-    password: 'Password',
-    passwordHint: 'Minimum 8 characters with letters and numbers.',
-    signInBtn: 'Sign In & Continue',
-    registerB2BBtn: 'Complete B2B Registration',
-    registerB2CBtn: 'Complete Individual Registration',
-    demoTitle: 'Instant Demo Sign-In:',
-    demoB2C: 'Individual B2C Demo',
-    demoB2B: 'Company B2B Demo',
-    noAccount: "Don't have an account?",
-    createNow: 'Create one now',
-    hasAccount: 'Already have an account?',
-    signInLink: 'Sign in',
-    invalidTaxId: 'Company Tax ID (ՀՎՀՀ) must be exactly 8 digits (e.g. 01234567).',
-  },
-};
-
 export const AuthModal: React.FC = () => {
-  const { isAuthModalOpen, closeAuthModal, authModalMode, setAuthModalMode, login, register } = useAuth();
-  const { lang } = useLanguage();
-  const L = AUTH_LABELS[lang] || AUTH_LABELS.hy;
-  
+  const { isAuthModalOpen, closeAuthModal, authModalMode, setAuthModalMode, login, register } =
+    useAuth();
+  const { t } = useLanguage();
+
   const [accountType, setAccountType] = useState<AccountType>('individual');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -105,7 +21,7 @@ export const AuthModal: React.FC = () => {
   const [taxId, setTaxId] = useState('');
   const [contactPerson, setContactPerson] = useState('');
   const [phone, setPhone] = useState('');
-  
+
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -117,7 +33,7 @@ export const AuthModal: React.FC = () => {
 
     if (authModalMode === 'register' && accountType === 'company') {
       if (!ARMENIAN_HVHH_REGEX.test(taxId.trim())) {
-        setError(L.invalidTaxId);
+        setError(t('errors.invalid_hvhh'));
         return;
       }
     }
@@ -142,7 +58,7 @@ export const AuthModal: React.FC = () => {
         await register(payload);
       }
     } catch (err: any) {
-      setError(err.message || 'Authentication failed. Please verify credentials.');
+      setError(err.message || t('errors.auth_failed'));
     } finally {
       setIsLoading(false);
     }
@@ -185,14 +101,17 @@ export const AuthModal: React.FC = () => {
           <div className="flex items-center justify-between pb-4">
             <div>
               <span className="text-[10px] font-bold uppercase tracking-widest text-[#0D5257]">
-                {L.securityBadge}
+                {t('auth.security_badge')}
               </span>
               <h2 className="text-xl font-extrabold tracking-tight text-neutral-900">
-                {authModalMode === 'login' ? L.signInTitle : L.registerTitle}
+                {authModalMode === 'login'
+                  ? t('auth.sign_in_title')
+                  : t('auth.create_account_title')}
               </h2>
             </div>
             <button
               type="button"
+              aria-label={t('catalog.close_modal')}
               onClick={closeAuthModal}
               className="rounded-full p-1.5 text-neutral-400 hover:bg-neutral-100 hover:text-black transition-colors"
             >
@@ -225,7 +144,7 @@ export const AuthModal: React.FC = () => {
                 }`}
               >
                 <User className="h-3.5 w-3.5" />
-                <span>{L.individualTab}</span>
+                <span>{t('auth.individual_tab')}</span>
               </button>
 
               <button
@@ -238,7 +157,7 @@ export const AuthModal: React.FC = () => {
                 }`}
               >
                 <Building2 className="h-3.5 w-3.5" />
-                <span>{L.companyTab}</span>
+                <span>{t('auth.company_tab')}</span>
               </button>
             </div>
           )}
@@ -248,27 +167,27 @@ export const AuthModal: React.FC = () => {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-1">
-                    {L.firstName}
+                    {t('auth.first_name_label')}
                   </label>
                   <input
                     type="text"
                     required
                     value={firstName}
                     onChange={(e) => setFirstName(e.target.value)}
-                    placeholder="Արմեն"
+                    placeholder={t('auth.first_name_placeholder')}
                     className="w-full rounded-xl bg-neutral-50 px-3.5 py-2.5 text-xs text-neutral-900 border-0 outline-none ring-1 ring-neutral-200/60 focus:bg-white focus:ring-2 focus:ring-[#0D5257] transition-all"
                   />
                 </div>
                 <div>
                   <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-1">
-                    {L.lastName}
+                    {t('auth.last_name_label')}
                   </label>
                   <input
                     type="text"
                     required
                     value={lastName}
                     onChange={(e) => setLastName(e.target.value)}
-                    placeholder="Հակոբյան"
+                    placeholder={t('auth.last_name_placeholder')}
                     className="w-full rounded-xl bg-neutral-50 px-3.5 py-2.5 text-xs text-neutral-900 border-0 outline-none ring-1 ring-neutral-200/60 focus:bg-white focus:ring-2 focus:ring-[#0D5257] transition-all"
                   />
                 </div>
@@ -279,21 +198,21 @@ export const AuthModal: React.FC = () => {
               <>
                 <div>
                   <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-1">
-                    {L.companyName}
+                    {t('auth.company_name_label')}
                   </label>
                   <input
                     type="text"
                     required
                     value={companyName}
                     onChange={(e) => setCompanyName(e.target.value)}
-                    placeholder="«ԲիլդՔորփ Արմենիա» ՍՊԸ"
+                    placeholder={t('auth.company_placeholder')}
                     className="w-full rounded-xl bg-neutral-50 px-3.5 py-2.5 text-xs text-neutral-900 border-0 outline-none ring-1 ring-neutral-200/60 focus:bg-white focus:ring-2 focus:ring-[#0D5257] transition-all"
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-1">
-                      {L.taxId}
+                      {t('auth.tax_id_label')}
                     </label>
                     <input
                       type="text"
@@ -308,21 +227,21 @@ export const AuthModal: React.FC = () => {
                   </div>
                   <div>
                     <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-1">
-                      {L.contactPerson}
+                      {t('auth.contact_person_label')}
                     </label>
                     <input
                       type="text"
                       required
                       value={contactPerson}
                       onChange={(e) => setContactPerson(e.target.value)}
-                      placeholder="Դավիթ Հակոբյան"
+                      placeholder={t('auth.contact_placeholder')}
                       className="w-full rounded-xl bg-neutral-50 px-3.5 py-2.5 text-xs text-neutral-900 border-0 outline-none ring-1 ring-neutral-200/60 focus:bg-white focus:ring-2 focus:ring-[#0D5257] transition-all"
                     />
                   </div>
                 </div>
                 <div>
                   <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-1">
-                    {L.phone}
+                    {t('auth.phone_label')}
                   </label>
                   <input
                     type="tel"
@@ -337,7 +256,7 @@ export const AuthModal: React.FC = () => {
 
             <div>
               <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-1">
-                {L.email}
+                {t('auth.email_label')}
               </label>
               <div className="relative flex items-center">
                 <Mail className="absolute left-3.5 h-4 w-4 text-neutral-400 pointer-events-none" />
@@ -346,7 +265,7 @@ export const AuthModal: React.FC = () => {
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="name@company.am"
+                  placeholder={t('auth.email_placeholder')}
                   className="w-full rounded-xl bg-neutral-50 pl-10 pr-3.5 py-2.5 text-xs text-neutral-900 border-0 outline-none ring-1 ring-neutral-200/60 focus:bg-white focus:ring-2 focus:ring-[#0D5257] transition-all"
                 />
               </div>
@@ -354,7 +273,7 @@ export const AuthModal: React.FC = () => {
 
             <div>
               <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-1">
-                {L.password}
+                {t('auth.password_label')}
               </label>
               <div className="relative flex items-center">
                 <Lock className="absolute left-3.5 h-4 w-4 text-neutral-400 pointer-events-none" />
@@ -369,9 +288,7 @@ export const AuthModal: React.FC = () => {
                 />
               </div>
               {authModalMode === 'register' && (
-                <p className="mt-1 text-[10px] text-neutral-400">
-                  {L.passwordHint}
-                </p>
+                <p className="mt-1 text-[10px] text-neutral-400">{t('auth.password_hint')}</p>
               )}
             </div>
 
@@ -385,11 +302,11 @@ export const AuthModal: React.FC = () => {
               {isLoading ? (
                 <Loader2 className="h-4 w-4 animate-spin text-white" />
               ) : authModalMode === 'login' ? (
-                L.signInBtn
+                t('auth.login_btn')
               ) : accountType === 'company' ? (
-                L.registerB2BBtn
+                t('auth.register_b2b_btn')
               ) : (
-                L.registerB2CBtn
+                t('auth.register_b2c_btn')
               )}
             </motion.button>
           </form>
@@ -397,7 +314,7 @@ export const AuthModal: React.FC = () => {
           {/* Quick Demo Credentials for Reviewers */}
           <div className="mt-5 rounded-2xl bg-neutral-50 p-3 border border-neutral-100">
             <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 block mb-1.5">
-              {L.demoTitle}
+              {t('auth.demo_title')}
             </span>
             <div className="flex gap-2">
               <button
@@ -405,14 +322,14 @@ export const AuthModal: React.FC = () => {
                 onClick={() => handleDemoFill('admin')}
                 className="flex-1 rounded-lg bg-white px-2 py-1.5 text-[11px] font-semibold text-neutral-700 shadow-sm hover:text-black border border-neutral-200/60"
               >
-                {L.demoB2C}
+                {t('auth.demo_b2c')}
               </button>
               <button
                 type="button"
                 onClick={() => handleDemoFill('b2b')}
                 className="flex-1 rounded-lg bg-white px-2 py-1.5 text-[11px] font-semibold text-[#0D5257] shadow-sm hover:text-black border border-neutral-200/60"
               >
-                {L.demoB2B}
+                {t('auth.demo_b2b')}
               </button>
             </div>
           </div>
@@ -421,7 +338,7 @@ export const AuthModal: React.FC = () => {
           <div className="mt-5 text-center text-xs text-neutral-500">
             {authModalMode === 'login' ? (
               <p>
-                {L.noAccount}{' '}
+                {t('auth.no_account')}{' '}
                 <button
                   type="button"
                   onClick={() => {
@@ -430,12 +347,12 @@ export const AuthModal: React.FC = () => {
                   }}
                   className="font-bold text-[#0D5257] underline underline-offset-2 hover:opacity-80"
                 >
-                  {L.createNow}
+                  {t('auth.create_now')}
                 </button>
               </p>
             ) : (
               <p>
-                {L.hasAccount}{' '}
+                {t('auth.has_account')}{' '}
                 <button
                   type="button"
                   onClick={() => {
@@ -444,7 +361,7 @@ export const AuthModal: React.FC = () => {
                   }}
                   className="font-bold text-[#0D5257] underline underline-offset-2 hover:opacity-80"
                 >
-                  {L.signInLink}
+                  {t('auth.sign_in_link')}
                 </button>
               </p>
             )}
@@ -452,7 +369,7 @@ export const AuthModal: React.FC = () => {
 
           <div className="mt-4 flex items-center justify-center gap-1.5 text-[10px] text-neutral-400">
             <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
-            <span>OWASP Protected • In-Memory Access Token • HttpOnly Cookie</span>
+            <span>{t('auth.security_footer')}</span>
           </div>
         </motion.div>
       </div>

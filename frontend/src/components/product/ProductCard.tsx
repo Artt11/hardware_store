@@ -196,7 +196,7 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
             <button
               type="button"
               onClick={handleWishlistToggle}
-              aria-label={isSaved ? 'Remove from wishlist' : 'Add to wishlist'}
+              aria-label={isSaved ? t('catalog.wishlist_remove') : t('catalog.wishlist_add')}
               className={`flex h-10 w-10 items-center justify-center rounded-xl transition-colors ${
                 isSaved
                   ? 'bg-red-50 text-[#DA291C]'
@@ -213,7 +213,7 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
               <button
                 type="button"
                 onClick={handleDecrement}
-                aria-label="Decrease quantity"
+                aria-label={t('catalog.qty_decrease')}
                 className="flex h-8 w-7 items-center justify-center rounded-lg text-neutral-600 hover:bg-white hover:text-black transition-colors"
               >
                 <Minus className="h-3 w-3" />
@@ -224,7 +224,7 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
               <button
                 type="button"
                 onClick={handleIncrement}
-                aria-label="Increase quantity"
+                aria-label={t('catalog.qty_increase')}
                 className="flex h-8 w-7 items-center justify-center rounded-lg text-neutral-600 hover:bg-white hover:text-black transition-colors"
               >
                 <Plus className="h-3 w-3" />
@@ -295,7 +295,7 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
 
         <motion.button
           type="button"
-          aria-label={isSaved ? 'Remove from favorites' : 'Save to favorites'}
+          aria-label={isSaved ? t('catalog.wishlist_remove') : t('catalog.wishlist_add')}
           whileTap={{ scale: 0.85 }}
           whileHover={{ scale: 1.12 }}
           onClick={handleWishlistToggle}
@@ -403,7 +403,7 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
               <button
                 type="button"
                 onClick={handleDecrement}
-                aria-label="Decrease quantity"
+                aria-label={t('catalog.qty_decrease')}
                 className="flex h-8 w-7 items-center justify-center rounded-lg text-neutral-600 hover:bg-white hover:text-black transition-colors"
               >
                 <Minus className="h-3 w-3" />
@@ -414,7 +414,7 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
               <button
                 type="button"
                 onClick={handleIncrement}
-                aria-label="Increase quantity"
+                aria-label={t('catalog.qty_increase')}
                 className="flex h-8 w-7 items-center justify-center rounded-lg text-neutral-600 hover:bg-white hover:text-black transition-colors"
               >
                 <Plus className="h-3 w-3" />

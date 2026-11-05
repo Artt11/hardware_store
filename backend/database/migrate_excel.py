@@ -49,6 +49,8 @@ BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parent.parent
 
 DEFAULT_EXCEL_PATHS = [
+    BASE_DIR / "Լավնա.xlsx",
+    PROJECT_ROOT / "Լավնա.xlsx",
     PROJECT_ROOT / "Products Սուրո.xlsx",
     BASE_DIR / "Products Սուրո.xlsx",
 ]
@@ -56,6 +58,7 @@ DEFAULT_EXCEL_PATHS = [
 MIGRATION_SQL_PATH = BASE_DIR / "migrations" / "001_products_schema.sql"
 SEEDED_JSON_PATH = BASE_DIR / "products_seeded.json"
 FRONTEND_PUBLIC_JSON_PATH = PROJECT_ROOT / "frontend" / "public" / "products_catalog.json"
+FRONTEND_PRODUCT_IMAGES_DIR = PROJECT_ROOT / "frontend" / "public" / "images" / "products"
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -279,9 +282,150 @@ def read_excel_with_stdlib(excel_path: Path) -> List[Dict[str, Any]]:
         return records
 
 
+def normalize_sku(raw_val: Any, fallback_idx: int) -> str:
+    """Normalize Excel SKU values (including float '1.0' or '1') to 5-digit '00001'."""
+    s = clean_string(raw_val)
+    if not s:
+        return f"{fallback_idx:05d}"
+    if s.endswith(".0") and s[:-2].isdigit():
+        s = s[:-2]
+    if s.isdigit() and len(s) < 5:
+        return s.zfill(5)
+    return s
+
+
+def extract_embedded_images_from_excel(
+    excel_path: Path,
+    output_dir: Path = FRONTEND_PRODUCT_IMAGES_DIR,
+) -> Dict[str, str]:
+    """
+    Extracts embedded product photos from `xl/drawings/drawing1.xml` + `xl/media/*`
+    inside an `.xlsx` workbook (such as `Լավնա.xlsx`), saves them to
+    `frontend/public/images/products/{sku}.{ext}`, and returns `{sku: '/images/products/...'}`.
+    """
+    sku_to_image_url: Dict[str, str] = {}
+    if not excel_path.exists():
+        return sku_to_image_url
+
+    ns_sheet = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    ns_draw = {
+        "xdr": "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing",
+        "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+    }
+    rel_embed_attr = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
+
+    try:
+        with zipfile.ZipFile(excel_path, "r") as zf:
+            names = set(zf.namelist())
+            if (
+                "xl/drawings/drawing1.xml" not in names
+                or "xl/drawings/_rels/drawing1.xml.rels" not in names
+                or "xl/worksheets/sheet1.xml" not in names
+            ):
+                return sku_to_image_url
+
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            shared_strings: List[str] = []
+            if "xl/sharedStrings.xml" in names:
+                sst_root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+                for si in sst_root.findall("a:si", ns_sheet):
+                    shared_strings.append("".join(t.text or "" for t in si.findall(".//a:t", ns_sheet)))
+
+            sheet_root = ET.fromstring(zf.read("xl/worksheets/sheet1.xml"))
+            rows_el = sheet_root.findall(".//a:sheetData/a:row", ns_sheet)
+
+            # Map 0-indexed Excel row -> normalized 5-digit SKU
+            row0_to_sku: Dict[int, str] = {}
+            for r_el in rows_el:
+                r_num_1idx = int(r_el.attrib.get("r", 0))
+                if r_num_1idx <= 3:
+                    continue
+                for c_el in r_el.findall("a:c", ns_sheet):
+                    ref = c_el.attrib.get("r", "")
+                    col_letters = "".join(ch for ch in ref if ch.isalpha())
+                    if col_letters == "A":
+                        c_type = c_el.attrib.get("t", "")
+                        v_el = c_el.find("a:v", ns_sheet)
+                        if v_el is not None and v_el.text is not None:
+                            raw_v = (
+                                shared_strings[int(v_el.text)]
+                                if c_type == "s"
+                                else v_el.text
+                            )
+                            row0_to_sku[r_num_1idx - 1] = normalize_sku(raw_v, r_num_1idx - 3)
+                        break
+
+            rels_root = ET.fromstring(zf.read("xl/drawings/_rels/drawing1.xml.rels"))
+            rid_to_media: Dict[str, str] = {}
+            for rel in rels_root:
+                rid = rel.attrib.get("Id", "")
+                target = rel.attrib.get("Target", "")
+                if rid and target:
+                    media_zip_path = "xl/" + target.lstrip("./").replace("../", "")
+                    rid_to_media[rid] = media_zip_path
+
+            drawing_root = ET.fromstring(zf.read("xl/drawings/drawing1.xml"))
+            anchors = (
+                drawing_root.findall("xdr:twoCellAnchor", ns_draw)
+                + drawing_root.findall("xdr:oneCellAnchor", ns_draw)
+            )
+
+            for anchor in anchors:
+                fr = anchor.find("xdr:from", ns_draw)
+                if fr is None:
+                    continue
+                r_el = fr.find("xdr:row", ns_draw)
+                if r_el is None or r_el.text is None:
+                    continue
+                r_idx = int(r_el.text)
+                # First product row (00001) is at 0-indexed row 3, even if top border touches row 2
+                target_row0 = 3 if r_idx < 3 else r_idx
+                sku = row0_to_sku.get(target_row0, f"{target_row0 - 2:05d}")
+
+                blip = anchor.find(".//a:blip", ns_draw)
+                if blip is None:
+                    continue
+                embed_id = blip.attrib.get(rel_embed_attr, "")
+                media_zip_path = rid_to_media.get(embed_id, "")
+                if not media_zip_path or media_zip_path not in names:
+                    continue
+
+                ext = Path(media_zip_path).suffix.lower() or ".jpg"
+                out_filename = f"{sku}{ext}"
+                out_filepath = output_dir / out_filename
+                out_filepath.write_bytes(zf.read(media_zip_path))
+                sku_to_image_url[sku] = f"/images/products/{out_filename}"
+
+            # Propagate shared product photos to adjacent size variants in rows 00038-00058
+            sibling_fallbacks = {
+                "00038": "00040",  # Դիսկ մետաղի 125*1,2մմ
+                "00039": "00040",  # Դիսկ մետաղի 230*1,6մմ
+                "00055": "00054",  # Խոզանակ․38մմ կարմիր
+                "00056": "00057",  # Խոզանակ․50մմ կարմիր
+                "00058": "00057",  # Խոզանակ100մմ կարմիր
+            }
+            for target_sku, source_sku in sibling_fallbacks.items():
+                if target_sku not in sku_to_image_url and source_sku in sku_to_image_url:
+                    sku_to_image_url[target_sku] = sku_to_image_url[source_sku]
+
+            print(
+                f"[INFO] Extracted {len(sku_to_image_url)} embedded product photos from '{excel_path.name}' "
+                f"into '{output_dir}'."
+            )
+    except Exception as exc:
+        print(f"[WARN] Could not extract embedded drawings from '{excel_path.name}': {exc}")
+
+    return sku_to_image_url
+
+
 def parse_and_clean_excel(excel_path: Path) -> List[Dict[str, Any]]:
     if not excel_path.exists():
         raise FileNotFoundError(f"Excel file not found at: {excel_path}")
+
+    embedded_images_map = extract_embedded_images_from_excel(excel_path)
+    if not embedded_images_map and (BASE_DIR / "Լավնա.xlsx").exists():
+        embedded_images_map = extract_embedded_images_from_excel(BASE_DIR / "Լավնա.xlsx")
 
     if HAS_PANDAS:
         try:
@@ -300,11 +444,7 @@ def parse_and_clean_excel(excel_path: Path) -> List[Dict[str, Any]]:
     seen_skus: Dict[str, int] = {}
 
     for idx, row in enumerate(raw_records, start=1):
-        sku = clean_string(row.get("Կոդ"))
-        if not sku:
-            sku = f"{idx:05d}"
-        elif sku.isdigit() and len(sku) < 5:
-            sku = sku.zfill(5)
+        sku = normalize_sku(row.get("Կոդ"), idx)
 
         name = (
             clean_string(row.get("Անվանում"))
@@ -316,6 +456,8 @@ def parse_and_clean_excel(excel_path: Path) -> List[Dict[str, Any]]:
         raw_category = clean_string(row.get("Խումբ"))
 
         category, default_image = infer_category_and_image(raw_category, name, sku)
+        if sku in embedded_images_map:
+            default_image = embedded_images_map[sku]
 
         retail_price = to_decimal(row.get("Մանրածախ գին դրամով"), default="0.00")
         wholesale_price = to_decimal(row.get("Մեծածախ գին դրամով"), default="0.00")
