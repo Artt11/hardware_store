@@ -20,3 +20,7 @@ ECC-main/
 .agents/
 skills-lock.json
 .DS_Store
+
+# Frontend build output
+dist/
+frontend/dist/
