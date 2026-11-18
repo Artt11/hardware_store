@@ -684,39 +684,39 @@ export default function App() {
       })),
     };
 
+    // Only a confirmed server response creates an order. On any failure the cart is kept,
+    // the dialog closes, and the checkout page shows the reason (audit C4).
+    let response: Response;
     try {
-      const response = await fetch(`${API_BASE_URL}/cart/checkout`, {
+      response = await fetch(`${API_BASE_URL}/cart/checkout`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-
-      let orderNumber = `LAVNA-${Math.floor(100000 + Math.random() * 900000)}`;
-      if (response.ok) {
-        const data = await response.json();
-        orderNumber = data.order_number || orderNumber;
-      }
-
-      setOrders((prev) => [
-        {
-          order_number: orderNumber,
-          grand_total: grandTotal,
-          created_at: new Date().toLocaleDateString(),
-          items_count: cart.reduce((s, i) => s + i.qty, 0),
-        },
-        ...prev,
-      ]);
     } catch {
-      setOrders((prev) => [
-        {
-          order_number: `LAVNA-${Math.floor(100000 + Math.random() * 900000)}`,
-          grand_total: grandTotal,
-          created_at: new Date().toLocaleDateString(),
-          items_count: cart.reduce((s, i) => s + i.qty, 0),
-        },
-        ...prev,
-      ]);
+      setOrderError(t('errors.checkout_network'));
+      setShowOrderConfirmModal(false);
+      return;
     }
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      const detail = typeof body?.detail === 'string' ? body.detail : null;
+      setOrderError(detail ?? t('errors.checkout_status', { status: response.status }));
+      setShowOrderConfirmModal(false);
+      return;
+    }
+
+    const data = await response.json();
+    setOrders((prev) => [
+      {
+        order_number: data.order_number,
+        grand_total: Number(data.grand_total ?? grandTotal),
+        created_at: new Date().toLocaleDateString(),
+        items_count: cart.reduce((s, i) => s + i.qty, 0),
+      },
+      ...prev,
+    ]);
 
     setCart([]);
     setShowOrderConfirmModal(false);
