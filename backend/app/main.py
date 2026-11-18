@@ -1,12 +1,16 @@
+import logging
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
-from app.core.config import settings
-from app.core.database import close_db_pool, get_active_dsn, get_db_pool, init_db_pool
-from app.core.middleware import SecurityHeadersMiddleware
 from app.api.v1.endpoints import auth, cart, products, search, wishlist
+from app.core.config import settings
+from app.core.database import close_db_pool, get_db_pool, init_db_pool
+from app.core.middleware import SecurityHeadersMiddleware
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -24,7 +28,7 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
-    description="Enterprise-Grade Minimalist Hardware Store API with PostgreSQL, Elasticsearch & Antigravity UI",
+    description="Suro B2C/B2B hardware store API (FastAPI + PostgreSQL).",
 )
 
 # 1. OWASP Top 10 Fortified Security Headers
@@ -61,33 +65,23 @@ app.include_router(cart.router, prefix=settings.API_V1_PREFIX)
 
 
 @app.get("/health", tags=["Health"])
-async def health_check():
+async def health_check() -> JSONResponse:
+    """Liveness + DB reachability. Never returns connection details."""
     pool = await get_db_pool()
-    db_status = "disconnected"
-    product_count = 0
     if pool is not None:
         try:
             async with pool.acquire() as conn:
-                product_count = int(await conn.fetchval("SELECT COUNT(*) FROM products;") or 0)
-                db_status = "connected"
-        except Exception:
-            db_status = "fallback_json"
-    else:
-        from app.api.v1.endpoints.products import load_fallback_catalog
-
-        product_count = len(load_fallback_catalog())
-        db_status = "fallback_json"
-
-    return {
-        "status": "healthy",
-        "service": settings.PROJECT_NAME,
-        "database": db_status,
-        "dsn": get_active_dsn(),
-        "total_products": product_count,
-    }
+                await conn.fetchval("SELECT 1")
+            return JSONResponse({"status": "healthy", "database": "connected"})
+        except Exception:  # any DB failure means "unavailable"
+            logger.exception("Health check: database query failed")
+    return JSONResponse(
+        {"status": "unhealthy", "database": "unavailable"},
+        status_code=503,
+    )
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True)

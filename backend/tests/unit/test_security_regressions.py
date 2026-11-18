@@ -1,0 +1,108 @@
+"""Regression tests for audit findings C1, C2 and R3 (see tasks/audit.md)."""
+
+from collections.abc import AsyncIterator
+from typing import Any
+
+import httpx
+import pytest
+
+from app.api.v1.endpoints.search import highlight_match
+from app.core.database import get_db_session
+from app.main import app
+
+
+class _EmptyResult:
+    def scalar_one_or_none(self) -> None:
+        return None
+
+    def scalars(self) -> "_EmptyResult":
+        return self
+
+    def all(self) -> list[Any]:
+        return []
+
+
+class _RecordingSession:
+    """Fake AsyncSession with no users in it that records every object added."""
+
+    def __init__(self) -> None:
+        self.added: list[Any] = []
+
+    async def execute(self, *_args: Any, **_kwargs: Any) -> _EmptyResult:
+        return _EmptyResult()
+
+    def add(self, obj: Any) -> None:
+        self.added.append(obj)
+
+    def add_all(self, objs: list[Any]) -> None:
+        self.added.extend(objs)
+
+    async def commit(self) -> None:
+        return None
+
+    async def rollback(self) -> None:
+        return None
+
+
+@pytest.fixture
+async def client() -> AsyncIterator[httpx.AsyncClient]:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+# C1 ---------------------------------------------------------------------------
+
+async def test_login_never_creates_accounts(client: httpx.AsyncClient) -> None:
+    session = _RecordingSession()
+
+    async def override() -> AsyncIterator[_RecordingSession]:
+        yield session
+
+    app.dependency_overrides[get_db_session] = override
+
+    response = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "nobody@example.com", "password": "not-a-real-password"},
+    )
+
+    assert response.status_code == 401
+    assert session.added == []
+
+
+# C2 ---------------------------------------------------------------------------
+
+async def test_health_does_not_expose_connection_string(client: httpx.AsyncClient) -> None:
+    response = await client.get("/health")
+
+    assert "dsn" not in response.json()
+    assert "postgresql" not in response.text
+
+
+async def test_health_reports_503_when_database_is_unreachable(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def no_pool() -> None:
+        return None
+
+    monkeypatch.setattr("app.main.get_db_pool", no_pool)
+
+    response = await client.get("/health")
+
+    assert response.status_code == 503
+    assert response.json()["database"] == "unavailable"
+
+
+# R3 ---------------------------------------------------------------------------
+
+def test_highlight_escapes_html_in_product_names() -> None:
+    result = highlight_match("<img src=x onerror=alert(1)> Drill", "drill")
+
+    assert "<img" not in result
+    assert "&lt;img src=x onerror=alert(1)&gt;" in result
+    assert "<mark class='bg-neutral-200 font-semibold'>Drill</mark>" in result
+
+
+def test_highlight_escapes_names_without_a_match() -> None:
+    assert highlight_match("<b>Hammer</b>", "") == "&lt;b&gt;Hammer&lt;/b&gt;"

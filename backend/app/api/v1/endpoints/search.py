@@ -199,6 +199,7 @@
 #             ],
 #         },
 #     )
+import html
 import re
 from typing import List, Optional
 
@@ -219,14 +220,19 @@ router = APIRouter(prefix="/search", tags=["Search"])
 
 
 def highlight_match(text_val: str, query: str) -> str:
-    """Wrap matching substring with <mark> tag for the minimalist header autocomplete."""
+    """Wrap matches in <mark> for autocomplete. Output is rendered as HTML by the
+    frontend, so every non-markup character is HTML-escaped (audit R3)."""
     if not query:
-        return text_val
+        return html.escape(text_val)
     pattern = re.compile(re.escape(query), re.IGNORECASE)
-    return pattern.sub(
-        lambda m: f"<mark class='bg-neutral-200 font-semibold'>{m.group(0)}</mark>",
-        text_val,
-    )
+    parts: list[str] = []
+    last = 0
+    for m in pattern.finditer(text_val):
+        parts.append(html.escape(text_val[last:m.start()]))
+        parts.append(f"<mark class='bg-neutral-200 font-semibold'>{html.escape(m.group(0))}</mark>")
+        last = m.end()
+    parts.append(html.escape(text_val[last:]))
+    return "".join(parts)
 
 
 @router.get("/autocomplete", response_model=AutocompleteResponse)

@@ -379,15 +379,12 @@ PostgreSQL-Backed Authentication & Session Endpoints (`backend/app/api/v1/endpoi
 Fixes:
 - BUG-01: Persists all B2C/B2B users, failed login counters, and token revocations in PostgreSQL.
 - ISSUE-03 [Applying Skill: Concurrency]: Uses `async_hash_password` and `async_verify_password` via `asyncio.to_thread` to avoid blocking the event loop.
-- ISSUE-05 [Applying Skill: Prevent N+1 Problem]: Idempotently seeds demo accounts using a single bulk query (IN clause) and concurrent password hashing.
 - ISSUE-12: Verifies `user.token_version` and `user.is_active` in `/api/v1/auth/me` so revoked access tokens are rejected immediately.
 """
 
-import asyncio
 from datetime import datetime, timezone
-from decimal import Decimal
 from typing import Any, Dict
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import func, select
@@ -413,97 +410,6 @@ from app.schemas.auth import (
 )
 
 router = APIRouter(prefix="/auth", tags=["Authentication & Security"])
-
-DEMO_USER_NAMESPACE = UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
-_DEMO_USERS_SEEDED: bool = False
-
-
-async def ensure_demo_users_seeded(db: AsyncSession) -> None:
-    """
-    [Applying Skill: Prevent N+1 Problem & Concurrency]
-    Idempotently seeds demo accounts using a single SELECT IN query and concurrent hashing.
-    """
-    global _DEMO_USERS_SEEDED
-    if _DEMO_USERS_SEEDED:
-        return
-
-    demo_specs = [
-        {
-            "email": "admin@auratools.com",
-            "password": "AdminSecure2026!",
-            "account_type": "individual",
-            "role": "admin",
-            "first_name": "Արամ",
-            "last_name": "Պետրոսյան",
-            "company_name": None,
-            "tax_id": None,
-            "contact_person": None,
-            "phone": "+374 91 00 11 22",
-            "credit_limit": Decimal("0.00"),
-            "payment_terms_days": 0,
-            "trade_discount_tier": Decimal("0.00"),
-        },
-        {
-            "email": "contractor@buildcorp.com",
-            "password": "BuildCorpSecure#1",
-            "account_type": "company",
-            "role": "b2b_contractor",
-            "first_name": "Դավիթ",
-            "last_name": "Հակոբյան",
-            "company_name": "BuildCorp Armenia LLC",
-            "tax_id": "01234567",
-            "contact_person": "Դավիթ Հակոբյան",
-            "phone": "+374 99 88 77 66",
-            "credit_limit": Decimal("5000000.00"),
-            "payment_terms_days": 30,
-            "trade_discount_tier": Decimal("12.00"),
-        },
-    ]
-
-    target_emails = [spec["email"].lower() for spec in demo_specs]
-
-    # 1. Single query to find existing demo users (No N+1)
-    stmt = select(User.email).where(func.lower(User.email).in_(target_emails))
-    existing_emails = set((await db.execute(stmt)).scalars().all())
-
-    missing_specs = [
-        spec for spec in demo_specs if spec["email"].lower() not in existing_emails]
-
-    if missing_specs:
-        # 2. Hash passwords concurrently without blocking the event loop
-        hashed_passwords = await asyncio.gather(
-            *[async_hash_password(spec["password"]) for spec in missing_specs]
-        )
-
-        new_users = []
-        for spec, pw_hash in zip(missing_specs, hashed_passwords):
-            new_users.append(
-                User(
-                    id=uuid5(DEMO_USER_NAMESPACE,
-                             f"demo-user-{spec['email']}"),
-                    email=spec["email"],
-                    password_hash=pw_hash,
-                    account_type=spec["account_type"],
-                    role=spec["role"],
-                    first_name=spec["first_name"],
-                    last_name=spec["last_name"],
-                    company_name=spec["company_name"],
-                    tax_id=spec["tax_id"],
-                    contact_person=spec["contact_person"],
-                    phone=spec["phone"],
-                    credit_limit=spec["credit_limit"],
-                    payment_terms_days=spec["payment_terms_days"],
-                    trade_discount_tier=spec["trade_discount_tier"],
-                    token_version=1,
-                    is_active=True,
-                    is_verified=True,
-                )
-            )
-
-        db.add_all(new_users)
-        await db.commit()
-
-    _DEMO_USERS_SEEDED = True
 
 
 def set_refresh_cookie(response: Response, refresh_token: str) -> None:
@@ -601,8 +507,6 @@ async def login(
         max_requests=settings.RATE_LIMIT_LOGIN_MAX,
         window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
     )
-
-    await ensure_demo_users_seeded(db)
 
     clean_email = payload.email.lower().strip()
     stmt = select(User).where(func.lower(User.email) == clean_email)
