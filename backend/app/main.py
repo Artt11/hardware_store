@@ -36,7 +36,8 @@ app.add_middleware(
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Session-Token", "Accept"],
+    allow_headers=["Authorization", "Content-Type",
+                   "X-Session-Token", "Accept"],
     expose_headers=["Retry-After"],
 )
 
@@ -89,4 +90,4 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
 
-git add .    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
