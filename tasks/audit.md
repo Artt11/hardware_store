@@ -8,10 +8,10 @@ performance-optimization, frontend-ui-engineering. Severity per code-review skil
 
 | # | Finding | Where | Fix in |
 |---|---------|-------|--------|
-| C1 | Hardcoded demo accounts (incl. `role="admin"`, password `AdminSecure2026!`) committed in source and auto-created on **every login in every environment**. Anyone reading the repo can sign in as admin. | `backend/app/api/v1/endpoints/auth.py:421-506, 605` | **Now** (remove); demo users move to seeder (P1 T7, env password, refused in prod) |
-| C2 | `/health` returns the active DSN, which includes the DB username and password when set. When the pool is down it imports `load_fallback_catalog`, which no longer exists → 500. | `backend/app/main.py:63-87` | **Now** |
+| ~~C1~~ ✅ `acbea48` | Hardcoded demo accounts (incl. `role="admin"`, password `AdminSecure2026!`) committed in source and auto-created on **every login in every environment**. Anyone reading the repo can sign in as admin. | `backend/app/api/v1/endpoints/auth.py:421-506, 605` | **Now** (remove); demo users move to seeder (P1 T7, env password, refused in prod) |
+| ~~C2~~ ✅ `acbea48` | `/health` returns the active DSN, which includes the DB username and password when set. When the pool is down it imports `load_fallback_catalog`, which no longer exists → 500. | `backend/app/main.py:63-87` | **Now** |
 | C3 | All guests without `X-Session-Token` share one cart (`"default-guest-session"`). Guests see and check out each other's carts; checkout empties the shared cart. | `cart.py:342, 371, 545` | P3 cart rewrite (server-issued random token) |
-| C4 | Frontend checkout fabricates a successful order (`LAVNA-xxxxxx`) when the API rejects it (409 out of stock, 422, 5xx) and adds it to order history. Customer believes an order exists that does not. | `frontend/src/App.tsx:688-700` | **Now** |
+| ~~C4~~ ✅ `6819b57` | Frontend checkout fabricates a successful order (`LAVNA-xxxxxx`) when the API rejects it (409 out of stock, 422, 5xx) and adds it to order history. Customer believes an order exists that does not. | `frontend/src/App.tsx:688-700` | **Now** |
 | C5 | `order_number = SURO-{time % 1e6}`: two orders in the same second collide (unique violation → 500), and the counter wraps every ~11.5 days. | `cart.py:415` | P1 (DB sequence) + P3 |
 | C6 | `b2b_invoice` (pay-later credit) is accepted from guests and individual accounts that type any 8 digits; credit limit never checked. | `cart.py:354-361` | P3 checkout service |
 
@@ -21,7 +21,7 @@ performance-optimization, frontend-ui-engineering. Severity per code-review skil
 |---|---------|-------|--------|
 | R1 | Revoked/deactivated sessions still work on cart, checkout and wishlist: those routes only decode the JWT; `token_version`/`is_active` checked in `/auth/me` and `/refresh` only. Optional-auth helper swallows every error. | `security.py:130-154`, `cart.py:49-57`, `wishlist.py` | P2 (single `get_current_user` dependency hitting DB) |
 | R2 | Access token returned in JSON and sent as `Authorization: Bearer`; spec requires both tokens exclusively in HttpOnly cookies. | `auth.py`, `AuthContext.tsx` | P2 + P4 |
-| R3 | Search autocomplete builds HTML (`<mark>`) from unescaped product names; frontend renders it with `dangerouslySetInnerHTML`. Stored XSS as soon as names are editable. | `search.py:218-226`, `Header.tsx:528` | **Now** (escape) ; P3 return match offsets instead of HTML |
+| ~~R3~~ ✅ `acbea48` | Search autocomplete builds HTML (`<mark>`) from unescaped product names; frontend renders it with `dangerouslySetInnerHTML`. Stored XSS as soon as names are editable. | `search.py:218-226`, `Header.tsx:528` | **Now** (escape) ; P3 return match offsets instead of HTML |
 | R4 | Stock stored twice (`products.stock_quantity` vs `inventory.quantity_on_hand`); checkout validates one and clamps the other with `max(0, …)`, so they drift. | models, `cart.py:430-437` | P1 T4 |
 | R5 | Login timing leaks which emails exist (no bcrypt work when user missing). `failed_login_attempts` counted but never enforced. | `auth.py:611-625` | P2 |
 | R6 | Registration: `tax_id` not validated as `^\d{8}$`; existence check + insert race returns 500 instead of 409; 128-char Armenian password can exceed bcrypt's 72-byte limit → 500. | `schemas/auth.py`, `auth.py:540-572` | P2 |
