@@ -1,28 +1,26 @@
 import type { Config } from 'tailwindcss';
 
 export default {
-  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+  content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
       colors: {
-        canvas: '#F8F9FA',
-        surface: '#FFFFFF',
+        canvas: '#f7f6f2',
+        ink: { DEFAULT: '#14171f', soft: '#4b5160', faint: '#8a8f9c' },
+        line: '#e4e2db',
         brand: {
-          dark: '#0B0F17',
-          charcoal: '#1E293B',
-          accent: '#FF5500', // Signal industrial orange for high-contrast CTA accents
-          muted: '#64748B',
-          light: '#F1F5F9',
+          DEFAULT: '#f5c518', // store yellow
+          soft: '#fdf3c4',
+          deep: '#8a5a00', // amber for text on white: 6.3:1
         },
+        ok: '#1f7a4d',
+        danger: '#b42318',
       },
-      boxShadow: {
-        'antigravity-sm': '0 10px 20px -5px rgba(0, 0, 0, 0.04), 0 4px 8px -2px rgba(0, 0, 0, 0.02)',
-        'antigravity': '0 20px 35px -10px rgba(0, 0, 0, 0.08), 0 10px 20px -5px rgba(0, 0, 0, 0.03)',
-        'antigravity-lg': '0 30px 60px -12px rgba(0, 0, 0, 0.12), 0 18px 36px -18px rgba(0, 0, 0, 0.06)',
+      fontFamily: {
+        sans: ['"Noto Sans Armenian"', '"Inter"', 'system-ui', 'sans-serif'],
       },
-      transitionTimingFunction: {
-        'antigravity': 'cubic-bezier(0.16, 1, 0.3, 1)',
-      },
+      borderRadius: { card: '10px' },
+      transitionTimingFunction: { out: 'cubic-bezier(0.16, 1, 0.3, 1)' },
     },
   },
   plugins: [],
