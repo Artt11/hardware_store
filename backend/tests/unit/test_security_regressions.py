@@ -54,6 +54,7 @@ async def client() -> AsyncIterator[httpx.AsyncClient]:
 
 # C1 ---------------------------------------------------------------------------
 
+
 async def test_login_never_creates_accounts(client: httpx.AsyncClient) -> None:
     session = _RecordingSession()
 
@@ -73,6 +74,7 @@ async def test_login_never_creates_accounts(client: httpx.AsyncClient) -> None:
 
 # C2 ---------------------------------------------------------------------------
 
+
 async def test_health_does_not_expose_connection_string(client: httpx.AsyncClient) -> None:
     response = await client.get("/health")
 
@@ -83,10 +85,10 @@ async def test_health_does_not_expose_connection_string(client: httpx.AsyncClien
 async def test_health_reports_503_when_database_is_unreachable(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def no_pool() -> None:
-        return None
+    async def unreachable() -> bool:
+        return False
 
-    monkeypatch.setattr("app.main.get_db_pool", no_pool)
+    monkeypatch.setattr("app.main.ping_database", unreachable)
 
     response = await client.get("/health")
 
@@ -95,6 +97,7 @@ async def test_health_reports_503_when_database_is_unreachable(
 
 
 # R3 ---------------------------------------------------------------------------
+
 
 def test_highlight_escapes_html_in_product_names() -> None:
     result = highlight_match("<img src=x onerror=alert(1)> Drill", "drill")

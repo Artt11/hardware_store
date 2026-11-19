@@ -1,4 +1,3 @@
-import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,19 +6,15 @@ from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.api.v1.endpoints import auth, cart, products, search, wishlist
 from app.core.config import settings
-from app.core.database import close_db_pool, get_db_pool, init_db_pool
+from app.core.database import dispose_engine, ping_database, verify_database_connection
 from app.core.middleware import SecurityHeadersMiddleware
-
-logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize PostgreSQL connection pool on startup
-    await init_db_pool()
+    await verify_database_connection()  # fail fast: never serve without the database
     yield
-    # Cleanly close PostgreSQL pool on shutdown
-    await close_db_pool()
+    await dispose_engine()
 
 
 app = FastAPI(
@@ -67,14 +62,8 @@ app.include_router(cart.router, prefix=settings.API_V1_PREFIX)
 @app.get("/health", tags=["Health"])
 async def health_check() -> JSONResponse:
     """Liveness + DB reachability. Never returns connection details."""
-    pool = await get_db_pool()
-    if pool is not None:
-        try:
-            async with pool.acquire() as conn:
-                await conn.fetchval("SELECT 1")
-            return JSONResponse({"status": "healthy", "database": "connected"})
-        except Exception:  # any DB failure means "unavailable"
-            logger.exception("Health check: database query failed")
+    if await ping_database():
+        return JSONResponse({"status": "healthy", "database": "connected"})
     return JSONResponse(
         {"status": "unhealthy", "database": "unavailable"},
         status_code=503,
