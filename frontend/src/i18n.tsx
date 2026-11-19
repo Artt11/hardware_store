@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
-import { LANGS, categoryName, cityName, formatMoney, unitLabel, type Lang } from './format';
+import { LANGS, categoryName, cityName, formatMoney, localName, unitLabel, type Lang } from './format';
 
 export { LANGS, type Lang };
 
@@ -242,6 +242,8 @@ interface I18n {
   unit: (unit: string) => string;
   category: (slug: string, fallback: string) => string;
   city: string;
+  /** Product name in the current language (Armenian fallback). */
+  name: (item: { name: string; name_ru?: string | null; name_en?: string | null }) => string;
 }
 
 const I18nContext = createContext<I18n | null>(null);
@@ -290,6 +292,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       unit: (u: string) => unitLabel(u, lang),
       category: (slug: string, fallback: string) => categoryName(slug, lang, fallback),
       city: cityName(lang),
+      name: (item: { name: string; name_ru?: string | null; name_en?: string | null }) => localName(item, lang),
     }),
     [lang, setLang, t],
   );

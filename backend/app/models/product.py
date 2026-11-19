@@ -44,6 +44,18 @@ class Product(UUIDPrimaryKey, Timestamps, Base):
         ),
         Index("ix_products_sku_trgm", "sku", postgresql_using="gin", postgresql_ops={"sku": "gin_trgm_ops"}),
         Index(
+            "ix_products_name_ru_trgm",
+            "name_ru",
+            postgresql_using="gin",
+            postgresql_ops={"name_ru": "gin_trgm_ops"},
+        ),
+        Index(
+            "ix_products_name_en_trgm",
+            "name_en",
+            postgresql_using="gin",
+            postgresql_ops={"name_en": "gin_trgm_ops"},
+        ),
+        Index(
             "ix_products_specifications",
             "specifications",
             postgresql_using="gin",
@@ -58,6 +70,9 @@ class Product(UUIDPrimaryKey, Timestamps, Base):
     sku: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     slug: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(500), nullable=False)
+    # Translations from database/product_translations.xlsx; NULL falls back to the Armenian name.
+    name_ru: Mapped[str | None] = mapped_column(String(500))
+    name_en: Mapped[str | None] = mapped_column(String(500))
     unit_of_measure: Mapped[str] = mapped_column(String(32), server_default="հատ", nullable=False)
 
     retail_price: Mapped[Decimal] = mapped_column(Money, nullable=False)
@@ -79,6 +94,10 @@ class Product(UUIDPrimaryKey, Timestamps, Base):
     inventory: Mapped["Inventory | None"] = relationship(
         back_populates="product", lazy="raise", uselist=False
     )
+
+    def name_in(self, lang: str) -> str:
+        """Display name for a language, falling back to Armenian."""
+        return {"ru": self.name_ru, "en": self.name_en}.get(lang) or self.name
 
     def price_for(self, *, is_b2b: bool) -> tuple[Decimal, str]:
         """Unit price and pricing tier for a customer type."""

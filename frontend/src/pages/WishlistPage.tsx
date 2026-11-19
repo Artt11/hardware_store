@@ -6,7 +6,7 @@ import { useAuth } from '../state/auth';
 import { useWishlist } from '../state/wishlist';
 
 export function WishlistPage({ onSignIn }: { onSignIn: () => void }) {
-  const { t } = useI18n();
+  const { t, name } = useI18n();
   const { user } = useAuth();
   const { ids, items, toggle } = useWishlist();
 
@@ -29,7 +29,7 @@ export function WishlistPage({ onSignIn }: { onSignIn: () => void }) {
                 <ProductImage src={item.image_url} alt="" category="" />
               </a>
               <div className="min-w-0 flex-1">
-                <a href={href(`/product/${item.slug}`)} className="line-clamp-2 text-sm font-medium text-ink hover:underline">{item.name}</a>
+                <a href={href(`/product/${item.slug}`)} className="line-clamp-2 text-sm font-medium text-ink hover:underline">{name(item)}</a>
                 <StockBadge inStock={item.in_stock} available={item.in_stock ? 99 : 0} />
               </div>
               <Price value={item.retail_price} className="text-sm" />

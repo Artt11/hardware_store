@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db_session
 from app.core.middleware import CSRF_HEADER, limiter
 from app.main import app
-from app.models import Inventory, User
+from app.models import Inventory, Product, User
 from app.seed.excel import ProductRow
 from app.seed.run import product_id_for, seed_catalog
 
@@ -237,3 +237,50 @@ async def test_listing_query_count_does_not_grow_with_page_size(
 
     assert small == large
     assert large <= 6
+
+
+async def translate(db: AsyncSession, sku: str, ru: str | None, en: str | None) -> None:
+    await db.execute(update(Product).where(Product.sku == sku).values(name_ru=ru, name_en=en))
+
+
+async def test_items_carry_translated_names(client: httpx.AsyncClient, db_session: AsyncSession) -> None:
+    await translate(db_session, "00003", "Молоток 500г", "Hammer 500 g")
+
+    item = (await listing(client, q="Մուրճ"))["items"][0]
+
+    assert item["name_ru"] == "Молоток 500г"
+    assert item["name_en"] == "Hammer 500 g"
+
+
+async def test_untranslated_names_are_null(client: httpx.AsyncClient) -> None:
+    item = (await listing(client, q="Մուրճ"))["items"][0]
+    assert item["name_ru"] is None and item["name_en"] is None
+
+
+async def test_search_finds_russian_and_english_names(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await translate(db_session, "00003", "Молоток 500г", "Hammer 500 g")
+
+    assert skus(await listing(client, q="молоток")) == ["00003"]
+    assert skus(await listing(client, q="hammer")) == ["00003"]
+
+
+async def test_name_sort_follows_the_language(client: httpx.AsyncClient, db_session: AsyncSession) -> None:
+    await translate(db_session, "00001", "Шуруп 4x40", "Screw 4x40")
+    await translate(db_session, "00003", "Молоток 500г", "Hammer 500 g")
+
+    english = skus(await listing(client, category=["fasteners", "hand-tools"], sort="name", lang="en"))
+
+    assert english.index("00003") < english.index("00001")  # "Hammer" before "Screw"
+
+
+async def test_autocomplete_highlights_in_the_requested_language(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await translate(db_session, "00003", "Молоток 500г", "Hammer 500 g")
+
+    body = (await client.get("/api/v1/search/autocomplete", params={"q": "hammer", "lang": "en"})).json()
+
+    assert body["products"][0]["highlight"].startswith("<mark")
+    assert "Hammer" in body["products"][0]["highlight"]

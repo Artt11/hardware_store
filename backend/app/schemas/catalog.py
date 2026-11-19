@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 SortOption = Literal["relevance", "price_asc", "price_desc", "name", "newest", "sku"]
+Lang = Literal["hy", "ru", "en"]
 MAX_PAGE_SIZE = 100
 
 
@@ -20,6 +21,8 @@ class ProductSummary(BaseModel):
     sku: str
     slug: str
     name: str
+    name_ru: str | None
+    name_en: str | None
     unit_of_measure: str
     category: CategoryRef
     price: Decimal = Field(description="Price for the current viewer (wholesale for B2B when available)")
@@ -87,6 +90,8 @@ class AutocompleteHit(BaseModel):
     sku: str
     slug: str
     name: str
+    name_ru: str | None
+    name_en: str | None
     price: Decimal
     unit_of_measure: str
     image_url: str | None

@@ -15,6 +15,8 @@ export interface ProductSummary {
   sku: string;
   slug: string;
   name: string;
+  name_ru: string | null;
+  name_en: string | null;
   unit_of_measure: string;
   category: CategoryRef;
   price: Money;
@@ -53,6 +55,7 @@ export interface ProductPage {
 export type SortOption = 'relevance' | 'price_asc' | 'price_desc' | 'name' | 'newest';
 
 export interface CatalogFilters {
+  lang?: 'hy' | 'ru' | 'en';
   q?: string;
   category?: string[];
   unit?: string[];
@@ -69,6 +72,8 @@ export interface AutocompleteHit {
   sku: string;
   slug: string;
   name: string;
+  name_ru: string | null;
+  name_en: string | null;
   price: Money;
   unit_of_measure: string;
   image_url: string | null;
@@ -109,6 +114,8 @@ export interface CartItem {
   sku: string;
   slug: string;
   name: string;
+  name_ru: string | null;
+  name_en: string | null;
   unit_of_measure: string;
   image_url: string | null;
   unit_price: Money;
@@ -197,6 +204,8 @@ export interface WishlistItem {
   sku: string;
   slug: string;
   name: string;
+  name_ru: string | null;
+  name_en: string | null;
   unit_of_measure: string;
   retail_price: Money;
   currency: string;

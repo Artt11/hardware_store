@@ -14,7 +14,7 @@ const FREE_SHIPPING = 50000;
 const EXPRESS_COST = 2500;
 
 export function CheckoutPage() {
-  const { t, money, city } = useI18n();
+  const { t, money, city, name } = useI18n();
   const { user } = useAuth();
   const { cart, reload } = useCart();
   const [delivery, setDelivery] = useState<DeliveryMethod>('express');
@@ -157,7 +157,7 @@ export function CheckoutPage() {
           <ul className="space-y-2 text-sm">
             {items.map((item) => (
               <li key={item.product_id} className="flex justify-between gap-3">
-                <span className="min-w-0 text-ink-soft"><span className="line-clamp-1">{item.name}</span><span className="text-xs text-ink-faint">× {item.quantity}</span></span>
+                <span className="min-w-0 text-ink-soft"><span className="line-clamp-1">{name(item)}</span><span className="text-xs text-ink-faint">× {item.quantity}</span></span>
                 <Price value={item.line_total} className="text-sm" />
               </li>
             ))}

@@ -12,6 +12,8 @@ class WishlistItemResponse(BaseModel):
     sku: str
     slug: str
     name: str
+    name_ru: str | None
+    name_en: str | None
     unit_of_measure: str
     retail_price: Decimal
     currency: str

@@ -33,7 +33,7 @@ function toQuery(f: CatalogFilters): URLSearchParams {
 }
 
 export function CatalogPage({ route }: { route: Route }) {
-  const { t, category } = useI18n();
+  const { t, category, lang } = useI18n();
   const { sessionKey } = useAuth();
   const reduceMotion = useReducedMotion();
   const filters = filtersFrom(route.query);
@@ -47,7 +47,7 @@ export function CatalogPage({ route }: { route: Route }) {
     const controller = new AbortController();
     setFailed(false);
     api<ProductPage>('/products', {
-      query: { ...filters, in_stock: filters.in_stock || undefined, page_size: PAGE_SIZE },
+      query: { ...filters, in_stock: filters.in_stock || undefined, page_size: PAGE_SIZE, lang },
       signal: controller.signal,
     })
       .then(setData)
@@ -56,7 +56,7 @@ export function CatalogPage({ route }: { route: Route }) {
       });
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` encodes every filter
-  }, [key, attempt, sessionKey]);
+  }, [key, attempt, sessionKey, lang]);
 
   const update = (patch: Partial<CatalogFilters>) => navigate('/', toQuery({ ...filters, page: 1, ...patch }));
   const toggleIn = (list: string[] = [], value: string) =>

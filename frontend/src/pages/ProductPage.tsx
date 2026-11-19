@@ -10,7 +10,7 @@ import { useCart } from '../state/cart';
 import { useWishlist } from '../state/wishlist';
 
 export function ProductPage({ slug }: { slug: string }) {
-  const { t, money, unit, category } = useI18n();
+  const { t, money, unit, category, name } = useI18n();
   const { sessionKey } = useAuth();
   const { quantityOf, setQuantity, open } = useCart();
   const { ids, toggle } = useWishlist();
@@ -61,11 +61,11 @@ export function ProductPage({ slug }: { slug: string }) {
       </a>
       <div className="mt-4 grid gap-8 pb-16 md:grid-cols-2">
         <div className="aspect-square overflow-hidden rounded-card border border-line bg-white p-6">
-          <ProductImage src={product.image_url} alt={product.name} category={product.category.slug} eager />
+          <ProductImage src={product.image_url} alt={name(product)} category={product.category.slug} eager />
         </div>
         <div className="flex flex-col gap-5">
           <div>
-            <h1 className="text-2xl font-bold leading-snug text-ink sm:text-3xl">{product.name}</h1>
+            <h1 className="text-2xl font-bold leading-snug text-ink sm:text-3xl">{name(product)}</h1>
             <p className="mt-2 text-sm text-ink-faint">{t('product.sku')} {product.sku}</p>
           </div>
           <div className="flex items-end gap-3">

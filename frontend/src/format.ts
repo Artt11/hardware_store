@@ -62,3 +62,13 @@ export function categoryName(slug: string, lang: Lang, fallback: string): string
 const CITY: Record<Lang, string> = { hy: 'Երևան', ru: 'Ереван', en: 'Yerevan' };
 
 export const cityName = (lang: Lang): string => CITY[lang];
+
+/** Product display name for a language; untranslated names fall back to Armenian. */
+export function localName(
+  item: { name: string; name_ru?: string | null; name_en?: string | null },
+  lang: Lang,
+): string {
+  if (lang === 'ru') return item.name_ru || item.name;
+  if (lang === 'en') return item.name_en || item.name;
+  return item.name;
+}

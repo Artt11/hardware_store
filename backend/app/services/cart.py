@@ -157,6 +157,8 @@ async def build_view(db: AsyncSession, cart: Cart | None, *, is_b2b: bool) -> Ca
                 sku=product.sku,
                 slug=product.slug,
                 name=product.name,
+                name_ru=product.name_ru,
+                name_en=product.name_en,
                 unit_of_measure=product.unit_of_measure,
                 image_url=product.image_url,
                 unit_price=price,

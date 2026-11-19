@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import DbSession, OptionalUser
-from app.schemas.catalog import MAX_PAGE_SIZE, CategoryWithCount, ProductDetail, ProductPage, SortOption
+from app.schemas.catalog import MAX_PAGE_SIZE, CategoryWithCount, Lang, ProductDetail, ProductPage, SortOption
 from app.services import catalog
 from app.services.catalog import CatalogQuery
 
@@ -24,6 +24,7 @@ async def list_products(
     max_price: Annotated[Decimal | None, Query(ge=0, max_digits=12, decimal_places=2)] = None,
     in_stock: bool = False,
     sort: SortOption = "relevance",
+    lang: Lang = "hy",
     page: Annotated[int, Query(ge=1, le=10_000)] = 1,
     page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 24,
 ) -> ProductPage:
@@ -38,6 +39,7 @@ async def list_products(
         page=page,
         page_size=page_size,
         is_b2b=bool(user and user.is_b2b),
+        lang=lang,
     )
     return await catalog.list_products(db, query)
 

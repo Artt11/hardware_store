@@ -9,7 +9,8 @@ import { useWishlist } from '../state/wishlist';
 import { Price, ProductImage, StockBadge, cx } from './ui';
 
 export function ProductCard({ product, eager }: { product: ProductSummary; eager?: boolean }) {
-  const { t, unit } = useI18n();
+  const { t, unit, name } = useI18n();
+  const title = name(product);
   const { quantityOf, setQuantity, open } = useCart();
   const { ids, toggle } = useWishlist();
   const [busy, setBusy] = useState(false);
@@ -35,7 +36,7 @@ export function ProductCard({ product, eager }: { product: ProductSummary; eager
       <a href={href(`/product/${product.slug}`)} className="block aspect-square overflow-hidden bg-white p-3">
         <ProductImage
           src={product.image_url}
-          alt={product.name}
+          alt={title}
           category={product.category.slug}
           eager={eager}
           className="transition-transform duration-300 ease-out group-hover:scale-[1.03]"
@@ -53,7 +54,7 @@ export function ProductCard({ product, eager }: { product: ProductSummary; eager
 
       <div className="flex flex-1 flex-col gap-2 border-t border-line p-3">
         <a href={href(`/product/${product.slug}`)} className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-5 text-ink hover:underline">
-          {product.name}
+          {title}
         </a>
         <div className="flex items-center justify-between gap-2 text-xs text-ink-faint">
           <span>{unit(product.unit_of_measure)}</span>
@@ -70,7 +71,7 @@ export function ProductCard({ product, eager }: { product: ProductSummary; eager
             type="button"
             onClick={add}
             disabled={!product.in_stock || busy || inCart >= product.available_quantity}
-            aria-label={`${t('product.add')}: ${product.name}`}
+            aria-label={`${t('product.add')}: ${title}`}
             className={cx(
               'grid h-10 w-10 place-items-center rounded-lg transition-transform hover:-translate-y-px active:scale-95 disabled:cursor-not-allowed disabled:opacity-40',
               inCart ? 'bg-brand text-ink' : 'bg-ink text-white',

@@ -18,7 +18,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,10 +28,12 @@ from app.models import Category, Inventory, Product, User
 from app.seed.categories import ALL_CATEGORIES
 from app.seed.excel import ProductRow, parse_workbook
 from app.seed.images import extract_images
+from app.seed.translations import Translations, read_translations
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_EXCEL = BACKEND_DIR / "database" / "Լավնա.xlsx"
 DEFAULT_IMAGES_DIR = BACKEND_DIR.parent / "frontend" / "public" / "images" / "products"
+DEFAULT_TRANSLATIONS = BACKEND_DIR / "database" / "product_translations.xlsx"
 PRODUCT_NAMESPACE = uuid.UUID("5d1b7a3e-2c4f-4e8a-9b6d-0f1e2d3c4b5a")
 BATCH_SIZE = 500
 
@@ -123,6 +125,15 @@ async def seed_catalog(
         )
 
 
+async def apply_translations(db: AsyncSession, translations: Translations) -> list[str]:
+    """Set name_ru/name_en by SKU. Returns SKUs that do not exist in the catalog."""
+    known = set(await db.scalars(select(Product.sku).where(Product.sku.in_(translations))))
+    for sku, (ru, en) in translations.items():
+        if sku in known:
+            await db.execute(update(Product).where(Product.sku == sku).values(name_ru=ru, name_en=en))
+    return sorted(set(translations) - known)
+
+
 DEMO_USERS: tuple[dict[str, Any], ...] = (
     {
         "email": "demo.customer@suro.am",
@@ -169,6 +180,12 @@ async def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--excel", type=Path, default=DEFAULT_EXCEL)
     parser.add_argument("--images-dir", type=Path, default=DEFAULT_IMAGES_DIR)
     parser.add_argument(
+        "--translations",
+        type=Path,
+        default=DEFAULT_TRANSLATIONS,
+        help="product name translations workbook (skipped if missing)",
+    )
+    parser.add_argument(
         "--stock",
         type=int,
         default=int(os.environ.get("SEED_DEFAULT_STOCK", "100")),
@@ -191,6 +208,8 @@ async def main(argv: Sequence[str] | None = None) -> int:
     try:
         async with SessionFactory() as db, db.begin():
             await seed_catalog(db, parsed.products, image_urls=images.urls, default_stock=args.stock)
+            translations = read_translations(args.translations) if args.translations.exists() else {}
+            unknown_skus = await apply_translations(db, translations)
             created_users = 0
             if args.demo_users:
                 password = os.environ.get("SEED_DEMO_PASSWORD", "")
@@ -208,6 +227,8 @@ async def main(argv: Sequence[str] | None = None) -> int:
         f"{len(parsed.warnings)} warnings"
     )
     print(f"Images:   {len(images.urls)} extracted, {len(images.unmatched)} unmatched")
+    applied = len(translations) - len(unknown_skus)
+    print(f"Translations: {applied} applied, unknown SKUs: {unknown_skus or 'none'}")
     if args.demo_users:
         print(f"Demo users created: {created_users}")
     for issue in parsed.skipped:

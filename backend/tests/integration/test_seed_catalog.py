@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Category, Inventory, Product, User
 from app.seed.categories import ALL_CATEGORIES
 from app.seed.excel import ProductRow
-from app.seed.run import DemoUsersRefused, product_id_for, seed_catalog, seed_demo_users
+from app.seed.run import DemoUsersRefused, apply_translations, product_id_for, seed_catalog, seed_demo_users
 
 
 def make_row(sku: str, **overrides: object) -> ProductRow:
@@ -120,3 +120,16 @@ async def test_demo_users_are_created_once(db_session: AsyncSession) -> None:
 async def test_demo_users_are_refused_in_production(db_session: AsyncSession) -> None:
     with pytest.raises(DemoUsersRefused):
         await seed_demo_users(db_session, password="Demo-password-123", environment="production")
+
+
+async def test_translations_are_applied_and_unknown_skus_reported(db_session: AsyncSession) -> None:
+    await seed_catalog(db_session, [make_row("00001")], image_urls={}, default_stock=1)
+
+    unknown = await apply_translations(db_session, {"00001": ("Шуруп", "Screw"), "99999": ("Нет", "None")})
+    await apply_translations(db_session, {"00001": ("Шуруп", "Screw")})  # idempotent
+
+    product = await db_session.scalar(select(Product).where(Product.sku == "00001"))
+    assert product is not None
+    await db_session.refresh(product)
+    assert (product.name_ru, product.name_en) == ("Шуруп", "Screw")
+    assert unknown == ["99999"]

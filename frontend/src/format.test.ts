@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { categoryName, cityName, formatMoney, unitLabel } from './format';
+import { categoryName, cityName, formatMoney, localName, unitLabel } from './format';
 
 const spaces = (s: string) => s.replace(/[  ]/g, ' ');
 
@@ -47,5 +47,15 @@ describe('cityName', () => {
     expect(cityName('en')).toBe('Yerevan');
     expect(cityName('ru')).toBe('Ереван');
     expect(cityName('hy')).toBe('Երևան');
+  });
+});
+
+describe('localName', () => {
+  const item = { name: 'Մուրճ', name_ru: 'Молоток', name_en: null };
+
+  it('uses the translation for the language and falls back to Armenian', () => {
+    expect(localName(item, 'ru')).toBe('Молоток');
+    expect(localName(item, 'en')).toBe('Մուրճ');
+    expect(localName(item, 'hy')).toBe('Մուրճ');
   });
 });

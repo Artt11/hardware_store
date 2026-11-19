@@ -24,6 +24,7 @@ from app.schemas.catalog import (
     CategoryRef,
     CategoryWithCount,
     Facets,
+    Lang,
     Pagination,
     PriceRange,
     ProductDetail,
@@ -48,6 +49,7 @@ class CatalogQuery:
     page: int = 1
     page_size: int = 24
     is_b2b: bool = False
+    lang: Lang = "hy"
 
 
 def _escape_like(term: str) -> str:
@@ -64,10 +66,21 @@ def stock_column() -> ColumnElement[int]:
     return func.coalesce(Inventory.quantity_on_hand, 0)
 
 
+def display_name(lang: Lang) -> ColumnElement[str]:
+    """Name column for a language, falling back to Armenian when untranslated."""
+    if lang == "ru":
+        return func.coalesce(Product.name_ru, Product.name)
+    if lang == "en":
+        return func.coalesce(Product.name_en, Product.name)
+    return Product.name  # type: ignore[return-value]
+
+
 def search_condition(q: str) -> ColumnElement[bool]:
     pattern = f"%{_escape_like(q)}%"
     return or_(
         Product.name.ilike(pattern, escape="\\"),
+        Product.name_ru.ilike(pattern, escape="\\"),
+        Product.name_en.ilike(pattern, escape="\\"),
         Product.sku.ilike(pattern, escape="\\"),
         Product.barcode == q,
         literal(q).op("<%")(Product.name),
@@ -105,24 +118,25 @@ def _base(*columns: Any) -> Select[Any]:
 
 def _order_by(query: CatalogQuery) -> list[Any]:
     price = effective_price(query.is_b2b)
+    name = display_name(query.lang)
     if query.sort == "relevance" and query.q:
         q = query.q
         return [
             case(
                 (or_(Product.sku == q, Product.barcode == q), 0),
-                (Product.name.ilike(f"{_escape_like(q)}%", escape="\\"), 1),
+                (name.ilike(f"{_escape_like(q)}%", escape="\\"), 1),
                 else_=2,
             ),
             desc(func.word_similarity(q, Product.name)),
-            Product.name,
+            name,
         ]
     options: dict[str, list[Any]] = {
-        "price_asc": [price, Product.name],
-        "price_desc": [desc(price), Product.name],
+        "price_asc": [price, name],
+        "price_desc": [desc(price), name],
         "newest": [desc(Product.created_at)],
         "sku": [Product.sku],
     }
-    return options.get(query.sort, [Product.name])
+    return options.get(query.sort, [name])
 
 
 def _summary(
@@ -134,6 +148,8 @@ def _summary(
         sku=product.sku,
         slug=product.slug,
         name=product.name,
+        name_ru=product.name_ru,
+        name_en=product.name_en,
         unit_of_measure=product.unit_of_measure,
         category=CategoryRef(slug=category_slug, name=category_name),
         price=price,
@@ -231,6 +247,17 @@ async def list_categories(db: AsyncSession) -> list[CategoryWithCount]:
     return [CategoryWithCount(slug=s, name=n, product_count=c) for s, n, c in rows]
 
 
+def _best_match_name(product: Product, q: str, lang: Lang) -> str:
+    """The display name, unless only another language's name contains the query."""
+    preferred = product.name_in(lang)
+    if q.lower() in preferred.lower():
+        return preferred
+    for candidate in (product.name, product.name_ru, product.name_en):
+        if candidate and q.lower() in candidate.lower():
+            return candidate
+    return preferred
+
+
 def highlight(name: str, q: str) -> str:
     """HTML-escape the name and wrap case-insensitive matches of `q` in <mark>."""
     if not q:
@@ -245,8 +272,10 @@ def highlight(name: str, q: str) -> str:
     return "".join(parts)
 
 
-async def autocomplete(db: AsyncSession, q: str, *, limit: int, is_b2b: bool) -> list[AutocompleteHit]:
-    query = CatalogQuery(q=q, sort="relevance", page_size=limit, is_b2b=is_b2b)
+async def autocomplete(
+    db: AsyncSession, q: str, *, limit: int, is_b2b: bool, lang: Lang = "hy"
+) -> list[AutocompleteHit]:
+    query = CatalogQuery(q=q, sort="relevance", page_size=limit, is_b2b=is_b2b, lang=lang)
     rows = (
         await db.execute(
             _base(Product, stock_column())
@@ -264,11 +293,13 @@ async def autocomplete(db: AsyncSession, q: str, *, limit: int, is_b2b: bool) ->
                 sku=product.sku,
                 slug=product.slug,
                 name=product.name,
+                name_ru=product.name_ru,
+                name_en=product.name_en,
                 price=price,
                 unit_of_measure=product.unit_of_measure,
                 image_url=product.image_url,
                 in_stock=stock > 0,
-                highlight=highlight(product.name, q),
+                highlight=highlight(_best_match_name(product, q, lang), q),
             )
         )
     return hits

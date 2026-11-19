@@ -9,7 +9,7 @@ import { Modal } from './Modal';
 import { Button, Notice, Price, ProductImage, QuantityStepper } from './ui';
 
 export function CartDrawer() {
-  const { t, money, unit } = useI18n();
+  const { t, money, unit, name } = useI18n();
   const { cart, isOpen, close, setQuantity, remove } = useCart();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -47,7 +47,7 @@ export function CartDrawer() {
                   <ProductImage src={item.image_url} alt="" category="" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="line-clamp-2 text-sm font-medium text-ink">{item.name}</p>
+                  <p className="line-clamp-2 text-sm font-medium text-ink">{name(item)}</p>
                   <p className="mt-0.5 text-xs text-ink-faint">
                     {money(item.unit_price)} / {unit(item.unit_of_measure)}
                   </p>
@@ -66,7 +66,7 @@ export function CartDrawer() {
                       type="button"
                       onClick={() => run(item.product_id, () => remove(item.product_id))}
                       className="grid h-9 w-9 place-items-center rounded-lg text-ink-faint hover:bg-black/5 hover:text-danger"
-                      aria-label={`${t('cart.remove')}: ${item.name}`}
+                      aria-label={`${t('cart.remove')}: ${name(item)}`}
                     >
                       <Trash2 className="h-4 w-4" aria-hidden />
                     </button>

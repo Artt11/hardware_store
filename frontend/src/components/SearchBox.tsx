@@ -8,7 +8,7 @@ import { Price, ProductImage, cx } from './ui';
 
 /** Instant search: debounced, cancels stale requests, keyboard navigable (combobox pattern). */
 export function SearchBox({ initial = '' }: { initial?: string }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const listId = useId();
   const [query, setQuery] = useState(initial);
   const [hits, setHits] = useState<AutocompleteHit[]>([]);
@@ -26,7 +26,7 @@ export function SearchBox({ initial = '' }: { initial?: string }) {
     }
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      api<{ products: AutocompleteHit[] }>('/search/autocomplete', { query: { q: term, limit: 6 }, signal: controller.signal })
+      api<{ products: AutocompleteHit[] }>('/search/autocomplete', { query: { q: term, limit: 6, lang }, signal: controller.signal })
         .then((data) => {
           setHits(data.products);
           setActive(-1);
@@ -37,7 +37,7 @@ export function SearchBox({ initial = '' }: { initial?: string }) {
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [query]);
+  }, [query, lang]);
 
   useEffect(() => {
     const onClick = (event: MouseEvent) => {

@@ -37,6 +37,8 @@ async def get_wishlist(db: AsyncSession, user_id: uuid.UUID) -> WishlistResponse
             sku=product.sku,
             slug=product.slug,
             name=product.name,
+            name_ru=product.name_ru,
+            name_en=product.name_en,
             unit_of_measure=product.unit_of_measure,
             retail_price=product.retail_price,
             currency=product.currency,
