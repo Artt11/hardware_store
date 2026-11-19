@@ -9,7 +9,7 @@ import pytest
 from app.core.database import get_db_session
 from app.core.middleware import limiter
 from app.main import app
-from app.api.v1.endpoints.search import highlight_match
+from app.services.catalog import highlight as highlight_match
 
 
 class _EmptyResult:
