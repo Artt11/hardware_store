@@ -30,7 +30,7 @@ performance-optimization, frontend-ui-engineering. Severity per code-review skil
 | ~~R9~~ ✅ `b691be7` | In-memory rate limiter + multi-worker Uvicorn = limit × workers; behind a proxy every client shares one IP. | `middleware.py` | P2 (document limit or move to Postgres/Redis) |
 | ~~R10~~ ✅ `1230ade` | Frontend loads catalog from static `products_catalog.json`, falls back to `/products?limit=250` → 1,141 of 1,391 products never shown. Filtering/search done client-side. | `App.tsx:485-510` | P4 |
 | ~~R11~~ ✅ `1230ade` | Checkout from frontend sends no credentials → B2B users charged retail, orders not linked to account. Order history kept only in browser state. Cart only in localStorage. | `App.tsx:688`, `CartDrawer.tsx` | P4 |
-| R12 | Docker: Dockerfile healthcheck hits `/api/v1/health` (route is `/health`) → container never healthy; compose mounts `schema.sql` into initdb **and** runs Alembic; seeds on every start; Elasticsearch exposed with security disabled; mounts the wrong Excel file; single Uvicorn worker; `build-essential` left in runtime image. | `backend/Dockerfile`, `docker-compose.yml` | P5 |
+| ~~R12~~ ✅ (Phase 5) | Docker: Dockerfile healthcheck hits `/api/v1/health` (route is `/health`) → container never healthy; compose mounts `schema.sql` into initdb **and** runs Alembic; seeds on every start; Elasticsearch exposed with security disabled; mounts the wrong Excel file; single Uvicorn worker; `build-essential` left in runtime image. | `backend/Dockerfile`, `docker-compose.yml` | P5 |
 | ~~R13~~ ✅ `bf99586` | ~1,100 lines of commented-out previous implementations in `auth.py` (1-377), `products.py`, `search.py`. | endpoints | P2/P3 (deleted with rewrite) |
 
 ## Consider
@@ -61,3 +61,12 @@ performance-optimization, frontend-ui-engineering. Severity per code-review skil
   cross-worker defense).
 
 Open question for the owner: fractional quantities (2.5 կգ, 3.2 մ)? Whole units today.
+
+## Dependency audit (2026-11-19)
+
+- Shipped code: `npm audit --omit=dev` 0 vulnerabilities; `pip-audit -r requirements.txt` none.
+- Deferred (dev-only, not shipped): `tinypool` (critical, GHSA-5gmw-xhrv-c9v3 / GHSA-85c8-ppgw-ccpr)
+  via vitest 3, and `esbuild` (moderate, GHSA-67mh-4wv8-2f99) via vite 5. Both need a major toolchain
+  upgrade (vitest 4 / vite 6+) that `npm audit fix --force` would apply blindly. Reachable only through
+  attacker-controlled options to local test runs / the localhost dev server. Upgrade as its own change
+  (read changelogs, one major at a time). Review by 2026-12-19.
