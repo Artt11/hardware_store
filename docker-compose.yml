@@ -1,117 +1,104 @@
+# Suro/Lavna storefront: PostgreSQL 16 + FastAPI + nginx (SPA and same-origin /api proxy).
+#
+#   cp .env.example .env            # fill in secrets
+#   docker compose up -d --build    # http://localhost:8080
+#   docker compose --profile seed run --rm seed    # import the Excel catalog (once / on update)
+#
+# Only the web entrypoint is published. TLS terminates in front of `web` in
+# production (ENVIRONMENT=production requires https origins and Secure cookies).
+
+x-backend-env: &backend-env
+  ENVIRONMENT: ${ENVIRONMENT:?set ENVIRONMENT in .env}
+  POSTGRES_USER: ${POSTGRES_USER:?}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+  POSTGRES_DB: ${POSTGRES_DB:-hardware_store}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  JWT_SECRET: ${JWT_SECRET:-}
+  JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-}
+  CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:8080"]}
+  TRUSTED_PROXY_IPS: '["172.28.0.10"]'
+  FORWARDED_ALLOW_IPS: 172.28.0.10
+
 services:
-  # ---------------------------------------------------------------------------
-  # 1. PostgreSQL 16 Service (ARM64 Apple Silicon Optimized)
-  # ---------------------------------------------------------------------------
   postgres:
-    image: postgres:16-alpine
-    platform: linux/arm64
-    container_name: hardware_store_postgres
+    # Debian image: its en_US.utf8 locale lets pg_trgm and ILIKE handle Armenian
+    # (the C locale used by Alpine images does not).
+    image: postgres:16-bookworm
     restart: unless-stopped
-    shm_size: 256mb
-    env_file:
-      - .env
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:-hardware_store}
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=en_US.utf8
     command: >
       postgres
       -c shared_buffers=256MB
       -c effective_cache_size=768MB
       -c work_mem=16MB
-      -c maintenance_work_mem=128MB
       -c random_page_cost=1.1
-      -c effective_io_concurrency=200
       -c max_connections=100
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-    networks:
-      - hardware_network
+    networks: [internal]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
-      retries: 10
-      start_period: 5s
-
-  # ---------------------------------------------------------------------------
-  # 2. Elasticsearch 8.12 Single-Node Service (Autocomplete & Faceted Search)
-  # ---------------------------------------------------------------------------
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
-    platform: linux/arm64
-    container_name: hardware_store_elasticsearch
-    restart: unless-stopped
-    environment:
-      - node.name=hardware-es-node
-      - cluster.name=hardware-es-cluster
-      - discovery.type=single-node
-      - bootstrap.memory_lock=true
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-      - xpack.security.enabled=false
-      - xpack.security.http.ssl.enabled=false
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-    ports:
-      - "9200:9200"
-    volumes:
-      - esdata:/usr/share/elasticsearch/data
-      - ./backend/elasticsearch/mappings.json:/usr/share/elasticsearch/config/mappings.json:ro
-    networks:
-      - hardware_network
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsSL http://localhost:9200/_cluster/health | grep -vq '\"status\":\"red\"'"]
-      interval: 10s
-      timeout: 5s
       retries: 12
 
-  # ---------------------------------------------------------------------------
-  # 3. FastAPI Backend Service (No hardcoded secrets; requires .env)
-  # ---------------------------------------------------------------------------
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    platform: linux/arm64
-    container_name: hardware_store_backend
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      ELASTICSEARCH_URL: http://elasticsearch:9200
-      ELASTICSEARCH_INDEX: ${ELASTICSEARCH_INDEX:-hardware_products}
-      SECRET_KEY: ${SECRET_KEY}
-      JWT_SECRET: ${JWT_SECRET}
-      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
-    command: >
-      sh -c "alembic upgrade head &&
-             python -m app.seed.run --images-dir /tmp/product-images &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000"
-    ports:
-      - "8000:8000"
+  migrate:
+    build: ./backend
+    command: ["alembic", "upgrade", "head"]
+    environment: *backend-env
     depends_on:
-      postgres:
-        condition: service_healthy
-      elasticsearch:
-        condition: service_healthy
+      postgres: { condition: service_healthy }
+    networks: [internal]
+    restart: "no"
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    networks: [internal]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    depends_on:
+      backend: { condition: service_healthy }
     networks:
-      - hardware_network
+      internal:
+        ipv4_address: 172.28.0.10
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  seed:
+    profiles: [seed]
+    build: ./backend
+    command: ["python", "-m", "app.seed.run", "--images-dir", "/tmp/product-images"]
+    environment:
+      <<: *backend-env
+      SEED_DEFAULT_STOCK: ${SEED_DEFAULT_STOCK:-100}
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    networks: [internal]
 
 networks:
-  hardware_network:
-    name: hardware_network
-    driver: bridge
+  internal:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
 
 volumes:
   pgdata:
-  esdata:
