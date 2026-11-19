@@ -206,9 +206,3 @@ export interface WishlistItem {
 }
 
 export const toAmount = (value: Money | null | undefined): number => Number(value ?? 0);
-
-const amdFormatter = new Intl.NumberFormat('hy-AM', { maximumFractionDigits: 0 });
-
-/** "4 500 ֏" — whole drams, Armenian grouping. */
-export const formatAmd = (value: Money | number | null | undefined): string =>
-  `${amdFormatter.format(typeof value === 'number' ? value : toAmount(value))} ֏`;

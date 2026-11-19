@@ -2,10 +2,9 @@ import { useState, type FormEvent } from 'react';
 import { CheckCircle2, Receipt, Store, Truck } from 'lucide-react';
 import { ApiError, api, errorMessage } from '../api/client';
 import {
-  formatAmd, toAmount, type CheckoutPayload, type DeliveryMethod, type OrderDetail, type PaymentMethod, type StockShortage,
+  toAmount, type CheckoutPayload, type DeliveryMethod, type OrderDetail, type PaymentMethod, type StockShortage,
 } from '../api/types';
 import { Button, Field, Notice, Price, cx } from '../components/ui';
-import { BRAND } from '../config/brand';
 import { useI18n } from '../i18n';
 import { href } from '../router';
 import { useAuth } from '../state/auth';
@@ -15,7 +14,7 @@ const FREE_SHIPPING = 50000;
 const EXPRESS_COST = 2500;
 
 export function CheckoutPage() {
-  const { t } = useI18n();
+  const { t, money, city } = useI18n();
   const { user } = useAuth();
   const { cart, reload } = useCart();
   const [delivery, setDelivery] = useState<DeliveryMethod>('express');
@@ -119,7 +118,7 @@ export function CheckoutPage() {
             </div>
             {delivery === 'express' && (
               <div className="grid gap-3 sm:grid-cols-[1fr_2fr]">
-                <Field label={t('checkout.city')} name="city" required minLength={2} maxLength={100} defaultValue={BRAND.city} autoComplete="address-level2" />
+                <Field label={t('checkout.city')} name="city" required minLength={2} maxLength={100} defaultValue={city} autoComplete="address-level2" />
                 <Field label={t('checkout.address')} name="address" required minLength={3} maxLength={300} autoComplete="street-address" />
               </div>
             )}
@@ -140,7 +139,7 @@ export function CheckoutPage() {
                   <Receipt className="mt-0.5 h-5 w-5 text-ink" aria-hidden />
                   <span>
                     <span className="block text-sm font-semibold text-ink">{t('checkout.invoice')}</span>
-                    <span className="block text-xs text-ink-soft">{user.company_name} · ՀՎՀՀ {user.tax_id}</span>
+                    <span className="block text-xs text-ink-soft">{user.company_name} · {t('auth.tax_id')} {user.tax_id}</span>
                   </span>
                 </label>
               )}
@@ -164,9 +163,9 @@ export function CheckoutPage() {
             ))}
           </ul>
           <dl className="space-y-1 border-t border-line pt-3 text-sm">
-            <div className="flex justify-between"><dt className="text-ink-soft">{t('cart.subtotal')}</dt><dd className="tabular-nums">{formatAmd(subtotal)}</dd></div>
-            <div className="flex justify-between"><dt className="text-ink-soft">{t('cart.shipping')}</dt><dd className="tabular-nums">{formatAmd(shipping)}</dd></div>
-            <div className="flex justify-between pt-2 text-base font-semibold"><dt>{t('checkout.total')}</dt><dd className="tabular-nums">{formatAmd(subtotal + shipping)}</dd></div>
+            <div className="flex justify-between"><dt className="text-ink-soft">{t('cart.subtotal')}</dt><dd className="tabular-nums">{money(subtotal)}</dd></div>
+            <div className="flex justify-between"><dt className="text-ink-soft">{t('cart.shipping')}</dt><dd className="tabular-nums">{money(shipping)}</dd></div>
+            <div className="flex justify-between pt-2 text-base font-semibold"><dt>{t('checkout.total')}</dt><dd className="tabular-nums">{money(subtotal + shipping)}</dd></div>
           </dl>
           {shortages.length > 0 && (
             <Notice>

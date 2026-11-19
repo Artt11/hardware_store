@@ -3,7 +3,7 @@ import {
   BrickWall, Droplets, Hammer, HardHat, KeyRound, Loader2, Minus, Nut, Package, PaintBucket, Plug, Plus,
   Ruler, Scissors, type LucideIcon,
 } from 'lucide-react';
-import { formatAmd, type Money } from '../api/types';
+import type { Money } from '../api/types';
 import { useI18n } from '../i18n';
 
 const cx = (...parts: (string | false | null | undefined)[]) => parts.filter(Boolean).join(' ');
@@ -78,7 +78,8 @@ export function Notice({ tone = 'danger', children }: { tone?: 'danger' | 'info'
 }
 
 export function Price({ value, className }: { value: Money; className?: string }) {
-  return <span className={cx('font-semibold tabular-nums text-ink', className)}>{formatAmd(value)}</span>;
+  const { money } = useI18n();
+  return <span className={cx('font-semibold tabular-nums text-ink', className)}>{money(value)}</span>;
 }
 
 export function StockBadge({ inStock, available }: { inStock: boolean; available: number }) {

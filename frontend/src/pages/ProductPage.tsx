@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Heart } from 'lucide-react';
 import { ApiError, api, errorMessage } from '../api/client';
-import { formatAmd, type ProductDetail } from '../api/types';
+import type { ProductDetail } from '../api/types';
 import { Button, Notice, Price, ProductImage, QuantityStepper, Spinner, StockBadge, cx } from '../components/ui';
 import { useI18n } from '../i18n';
 import { href } from '../router';
@@ -10,7 +10,7 @@ import { useCart } from '../state/cart';
 import { useWishlist } from '../state/wishlist';
 
 export function ProductPage({ slug }: { slug: string }) {
-  const { t } = useI18n();
+  const { t, money, unit, category } = useI18n();
   const { sessionKey } = useAuth();
   const { quantityOf, setQuantity, open } = useCart();
   const { ids, toggle } = useWishlist();
@@ -57,7 +57,7 @@ export function ProductPage({ slug }: { slug: string }) {
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
       <a href={href(`/?category=${product.category.slug}`)} className="text-sm text-ink-soft hover:text-ink">
-        ← {product.category.name}
+        ← {category(product.category.slug, product.category.name)}
       </a>
       <div className="mt-4 grid gap-8 pb-16 md:grid-cols-2">
         <div className="aspect-square overflow-hidden rounded-card border border-line bg-white p-6">
@@ -70,11 +70,11 @@ export function ProductPage({ slug }: { slug: string }) {
           </div>
           <div className="flex items-end gap-3">
             <Price value={product.price} className="text-3xl" />
-            <span className="pb-1 text-sm text-ink-faint">/ {product.unit_of_measure}</span>
+            <span className="pb-1 text-sm text-ink-faint">/ {unit(product.unit_of_measure)}</span>
           </div>
           {product.pricing_tier === 'wholesale' && (
             <p className="-mt-3 text-sm text-brand-deep">
-              {t('product.wholesale')} · {t('product.retail_was', { price: formatAmd(product.retail_price) })}
+              {t('product.wholesale')} · {t('product.retail_was', { price: money(product.retail_price) })}
             </p>
           )}
           <StockBadge inStock={product.in_stock} available={product.available_quantity} />
@@ -97,8 +97,8 @@ export function ProductPage({ slug }: { slug: string }) {
           {product.description && <p className="text-[15px] leading-7 text-ink-soft">{product.description}</p>}
 
           <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 border-t border-line pt-4 text-sm">
-            <dt className="text-ink-faint">{t('product.category')}</dt><dd className="text-ink">{product.category.name}</dd>
-            <dt className="text-ink-faint">{t('product.unit')}</dt><dd className="text-ink">{product.unit_of_measure}</dd>
+            <dt className="text-ink-faint">{t('product.category')}</dt><dd className="text-ink">{category(product.category.slug, product.category.name)}</dd>
+            <dt className="text-ink-faint">{t('product.unit')}</dt><dd className="text-ink">{unit(product.unit_of_measure)}</dd>
             {product.barcode && (<><dt className="text-ink-faint">{t('product.barcode')}</dt><dd className="tabular-nums text-ink">{product.barcode}</dd></>)}
           </dl>
         </div>

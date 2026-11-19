@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { errorMessage } from '../api/client';
-import { formatAmd, toAmount } from '../api/types';
+import { toAmount } from '../api/types';
 import { useI18n } from '../i18n';
 import { navigate } from '../router';
 import { useCart } from '../state/cart';
@@ -9,7 +9,7 @@ import { Modal } from './Modal';
 import { Button, Notice, Price, ProductImage, QuantityStepper } from './ui';
 
 export function CartDrawer() {
-  const { t } = useI18n();
+  const { t, money, unit } = useI18n();
   const { cart, isOpen, close, setQuantity, remove } = useCart();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +49,7 @@ export function CartDrawer() {
                 <div className="min-w-0 flex-1">
                   <p className="line-clamp-2 text-sm font-medium text-ink">{item.name}</p>
                   <p className="mt-0.5 text-xs text-ink-faint">
-                    {formatAmd(item.unit_price)} / {item.unit_of_measure}
+                    {money(item.unit_price)} / {unit(item.unit_of_measure)}
                   </p>
                   {!item.is_available && (
                     <p className="mt-1 text-xs font-medium text-danger">{t('cart.unavailable', { count: item.available_quantity })}</p>
@@ -81,7 +81,7 @@ export function CartDrawer() {
             {error && <Notice>{error}</Notice>}
             <div>
               <p className="text-xs text-ink-soft">
-                {remaining > 0 ? t('cart.free_shipping_left', { amount: formatAmd(remaining) }) : t('cart.free_shipping_reached')}
+                {remaining > 0 ? t('cart.free_shipping_left', { amount: money(remaining) }) : t('cart.free_shipping_reached')}
               </p>
               <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-canvas" aria-hidden>
                 <div className="h-full rounded-full bg-brand transition-[width] duration-500" style={{ width: `${progress}%` }} />

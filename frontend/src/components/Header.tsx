@@ -30,8 +30,8 @@ export function Header({ query, onSignIn }: { query: string; onSignIn: () => voi
           <SearchBox initial={query} />
         </div>
 
-        <nav className="ml-auto flex items-center gap-1" aria-label="Main">
-          <div className="mr-1 flex rounded-md bg-black/5 p-0.5 text-xs font-semibold" role="group" aria-label="Language">
+        <nav className="ml-auto flex items-center gap-1" aria-label={t('a11y.main_nav')}>
+          <div className="mr-1 flex rounded-md bg-black/5 p-0.5 text-xs font-semibold" role="group" aria-label={t('a11y.language')}>
             {LANGS.map((code) => (
               <button
                 key={code}

@@ -1,10 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
-export type Lang = 'hy' | 'ru' | 'en';
-export const LANGS: Lang[] = ['hy', 'ru', 'en'];
+import { LANGS, categoryName, cityName, formatMoney, unitLabel, type Lang } from './format';
+
+export { LANGS, type Lang };
 
 const hy = {
   'brand.tagline': 'Շինանյութ և գործիքներ',
+  'a11y.skip': 'Անցնել բովանդակությանը',
+  'a11y.main_nav': 'Հիմնական նավիգացիա',
+  'a11y.language': 'Լեզու',
+  'a11y.pagination': 'Էջեր',
   'nav.catalog': 'Կատալոգ',
   'nav.wishlist': 'Նախընտրածներ',
   'nav.account': 'Իմ էջը',
@@ -18,10 +23,6 @@ const hy = {
   'catalog.title': 'Կատալոգ',
   'catalog.results': '{count} ապրանք',
   'catalog.categories': 'Բաժիններ',
-  'catalog.units': 'Չափման միավոր',
-  'catalog.price': 'Գին, ֏',
-  'catalog.price_from': 'սկսած',
-  'catalog.price_to': 'մինչև',
   'catalog.in_stock_only': 'Միայն առկա',
   'catalog.clear': 'Մաքրել ֆիլտրերը',
   'catalog.sort': 'Դասավորել',
@@ -143,12 +144,12 @@ type Dictionary = Record<Key, string>;
 
 const ru: Dictionary = {
   'brand.tagline': 'Стройматериалы и инструменты',
+  'a11y.skip': 'Перейти к содержимому', 'a11y.main_nav': 'Основная навигация', 'a11y.language': 'Язык', 'a11y.pagination': 'Страницы',
   'nav.catalog': 'Каталог', 'nav.wishlist': 'Избранное', 'nav.account': 'Кабинет', 'nav.signin': 'Войти', 'nav.cart': 'Корзина',
   'search.placeholder': 'Товар, код или штрихкод…', 'search.no_results': 'Ничего не найдено', 'search.all_results': 'Все результаты',
   'hero.title': 'Стройматериалы и инструменты в одном месте',
-  'hero.subtitle': 'Более 1200 товаров на складе. Бесплатная доставка от 50 000 ֏, для компаний — оптовые цены и оплата по счёту.',
-  'catalog.title': 'Каталог', 'catalog.results': '{count} товаров', 'catalog.categories': 'Разделы', 'catalog.units': 'Единица',
-  'catalog.price': 'Цена, ֏', 'catalog.price_from': 'от', 'catalog.price_to': 'до', 'catalog.in_stock_only': 'Только в наличии',
+  'hero.subtitle': 'Более 1200 товаров на складе. Бесплатная доставка от 50 000 AMD, для компаний — оптовые цены и оплата по счёту.',
+  'catalog.title': 'Каталог', 'catalog.results': '{count} товаров', 'catalog.categories': 'Разделы', 'catalog.in_stock_only': 'Только в наличии',
   'catalog.clear': 'Сбросить фильтры', 'catalog.sort': 'Сортировка', 'sort.relevance': 'По релевантности', 'sort.name': 'По названию',
   'sort.price_asc': 'Сначала дешевле', 'sort.price_desc': 'Сначала дороже', 'sort.newest': 'Новинки',
   'catalog.empty': 'По этим фильтрам товаров нет', 'catalog.empty_hint': 'Измените запрос или сбросьте фильтры.',
@@ -163,7 +164,7 @@ const ru: Dictionary = {
   'cart.shipping': 'Доставка', 'cart.free_shipping_left': 'Ещё {amount} до бесплатной доставки', 'cart.free_shipping_reached': 'Доставка бесплатна',
   'cart.checkout': 'Оформить заказ', 'cart.remove': 'Удалить', 'cart.unavailable': 'В наличии только {count}', 'cart.close': 'Закрыть',
   'checkout.title': 'Оформление заказа', 'checkout.contact': 'Контакты', 'checkout.name': 'Имя и фамилия', 'checkout.phone': 'Телефон',
-  'checkout.email': 'Эл. почта', 'checkout.delivery': 'Способ получения', 'checkout.express': 'Доставка', 'checkout.express_hint': '2 500 ֏, бесплатно от 50 000 ֏',
+  'checkout.email': 'Эл. почта', 'checkout.delivery': 'Способ получения', 'checkout.express': 'Доставка', 'checkout.express_hint': '2 500 AMD, бесплатно от 50 000 AMD',
   'checkout.pickup': 'Самовывоз', 'checkout.pickup_hint': 'Бесплатно, Ереван', 'checkout.city': 'Город', 'checkout.address': 'Адрес',
   'checkout.payment': 'Оплата', 'checkout.card': 'Картой', 'checkout.cash': 'Наличными при получении', 'checkout.invoice': 'По счёту (B2B)',
   'checkout.invoice_hint': 'Оплата в течение {days} дней', 'checkout.notes': 'Комментарий', 'checkout.summary': 'Ваш заказ', 'checkout.total': 'Итого',
@@ -186,12 +187,12 @@ const ru: Dictionary = {
 
 const en: Dictionary = {
   'brand.tagline': 'Building materials and tools',
+  'a11y.skip': 'Skip to content', 'a11y.main_nav': 'Main navigation', 'a11y.language': 'Language', 'a11y.pagination': 'Pages',
   'nav.catalog': 'Catalog', 'nav.wishlist': 'Wishlist', 'nav.account': 'Account', 'nav.signin': 'Sign in', 'nav.cart': 'Cart',
   'search.placeholder': 'Product, code or barcode…', 'search.no_results': 'No matches', 'search.all_results': 'All results',
   'hero.title': 'Building materials and tools in one place',
-  'hero.subtitle': 'Over 1,200 products in stock. Free delivery from 50,000 ֏; companies get wholesale prices and invoice payment.',
-  'catalog.title': 'Catalog', 'catalog.results': '{count} products', 'catalog.categories': 'Categories', 'catalog.units': 'Unit',
-  'catalog.price': 'Price, ֏', 'catalog.price_from': 'from', 'catalog.price_to': 'to', 'catalog.in_stock_only': 'In stock only',
+  'hero.subtitle': 'Over 1,200 products in stock. Free delivery from 50,000 AMD; companies get wholesale prices and invoice payment.',
+  'catalog.title': 'Catalog', 'catalog.results': '{count} products', 'catalog.categories': 'Categories', 'catalog.in_stock_only': 'In stock only',
   'catalog.clear': 'Clear filters', 'catalog.sort': 'Sort', 'sort.relevance': 'Best match', 'sort.name': 'Name',
   'sort.price_asc': 'Price: low to high', 'sort.price_desc': 'Price: high to low', 'sort.newest': 'Newest',
   'catalog.empty': 'No products match these filters', 'catalog.empty_hint': 'Change the search or clear the filters.',
@@ -206,7 +207,7 @@ const en: Dictionary = {
   'cart.shipping': 'Delivery', 'cart.free_shipping_left': '{amount} more for free delivery', 'cart.free_shipping_reached': 'Delivery is free',
   'cart.checkout': 'Checkout', 'cart.remove': 'Remove', 'cart.unavailable': 'Only {count} available', 'cart.close': 'Close',
   'checkout.title': 'Checkout', 'checkout.contact': 'Contact details', 'checkout.name': 'Full name', 'checkout.phone': 'Phone',
-  'checkout.email': 'Email', 'checkout.delivery': 'Delivery', 'checkout.express': 'Delivery', 'checkout.express_hint': '2,500 ֏, free from 50,000 ֏',
+  'checkout.email': 'Email', 'checkout.delivery': 'Delivery', 'checkout.express': 'Delivery', 'checkout.express_hint': '2,500 AMD, free from 50,000 AMD',
   'checkout.pickup': 'Store pickup', 'checkout.pickup_hint': 'Free, Yerevan', 'checkout.city': 'City', 'checkout.address': 'Address',
   'checkout.payment': 'Payment', 'checkout.card': 'Card', 'checkout.cash': 'Cash on delivery', 'checkout.invoice': 'Invoice (B2B)',
   'checkout.invoice_hint': 'Pay within {days} days', 'checkout.notes': 'Notes', 'checkout.summary': 'Your order', 'checkout.total': 'Total',
@@ -236,6 +237,11 @@ interface I18n {
   lang: Lang;
   setLang: (lang: Lang) => void;
   t: T;
+  /** "4 500 ֏" (hy) or "4 500 AMD" (ru/en). */
+  money: (value: string | number | null | undefined) => string;
+  unit: (unit: string) => string;
+  category: (slug: string, fallback: string) => string;
+  city: string;
 }
 
 const I18nContext = createContext<I18n | null>(null);
@@ -275,7 +281,18 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     [lang],
   );
 
-  const value = useMemo(() => ({ lang, setLang, t }), [lang, setLang, t]);
+  const value = useMemo(
+    () => ({
+      lang,
+      setLang,
+      t,
+      money: (v: string | number | null | undefined) => formatMoney(v, lang),
+      unit: (u: string) => unitLabel(u, lang),
+      category: (slug: string, fallback: string) => categoryName(slug, lang, fallback),
+      city: cityName(lang),
+    }),
+    [lang, setLang, t],
+  );
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }
 

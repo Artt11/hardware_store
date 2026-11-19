@@ -16,9 +16,6 @@ function filtersFrom(query: URLSearchParams): CatalogFilters {
   return {
     q: query.get('q') ?? undefined,
     category: query.getAll('category'),
-    unit: query.getAll('unit'),
-    min_price: query.get('min') ?? undefined,
-    max_price: query.get('max') ?? undefined,
     in_stock: query.get('stock') === '1',
     sort: (query.get('sort') as SortOption | null) ?? (query.get('q') ? 'relevance' : 'name'),
     page: Number(query.get('page') ?? '1') || 1,
@@ -29,9 +26,6 @@ function toQuery(f: CatalogFilters): URLSearchParams {
   const q = new URLSearchParams();
   if (f.q) q.set('q', f.q);
   f.category?.forEach((c) => q.append('category', c));
-  f.unit?.forEach((u) => q.append('unit', u));
-  if (f.min_price) q.set('min', f.min_price);
-  if (f.max_price) q.set('max', f.max_price);
   if (f.in_stock) q.set('stock', '1');
   if (f.sort && f.sort !== (f.q ? 'relevance' : 'name')) q.set('sort', f.sort);
   if (f.page && f.page > 1) q.set('page', String(f.page));
@@ -39,7 +33,7 @@ function toQuery(f: CatalogFilters): URLSearchParams {
 }
 
 export function CatalogPage({ route }: { route: Route }) {
-  const { t } = useI18n();
+  const { t, category } = useI18n();
   const { sessionKey } = useAuth();
   const reduceMotion = useReducedMotion();
   const filters = filtersFrom(route.query);
@@ -67,7 +61,7 @@ export function CatalogPage({ route }: { route: Route }) {
   const update = (patch: Partial<CatalogFilters>) => navigate('/', toQuery({ ...filters, page: 1, ...patch }));
   const toggleIn = (list: string[] = [], value: string) =>
     list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
-  const hasFilters = Boolean(filters.category?.length || filters.unit?.length || filters.min_price || filters.max_price || filters.in_stock);
+  const hasFilters = Boolean(filters.category?.length || filters.in_stock);
   const isHome = !filters.q && !hasFilters && (filters.page ?? 1) === 1;
 
   return (
@@ -119,44 +113,13 @@ export function CatalogPage({ route }: { route: Route }) {
                       <label className="flex cursor-pointer items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-white">
                         <span className="flex items-center gap-2">
                           <input type="checkbox" className="accent-ink" checked={filters.category?.includes(c.slug) ?? false} onChange={() => update({ category: toggleIn(filters.category, c.slug) })} />
-                          {c.name}
+                          {category(c.slug, c.name)}
                         </span>
                         <span className="tabular-nums text-ink-faint">{c.count}</span>
                       </label>
                     </li>
                   ))}
                 </ul>
-              </fieldset>
-
-              <fieldset>
-                <legend className="mb-2 text-sm font-semibold text-ink">{t('catalog.price')}</legend>
-                <form
-                  className="flex items-center gap-2"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    const form = new FormData(e.currentTarget);
-                    update({ min_price: String(form.get('min') || '') || undefined, max_price: String(form.get('max') || '') || undefined });
-                  }}
-                >
-                  <input name="min" inputMode="numeric" pattern="[0-9]*" defaultValue={filters.min_price} placeholder={t('catalog.price_from')} aria-label={t('catalog.price_from')} className="w-full rounded-md border border-line bg-white px-2 py-1.5 text-sm" />
-                  <input name="max" inputMode="numeric" pattern="[0-9]*" defaultValue={filters.max_price} placeholder={t('catalog.price_to')} aria-label={t('catalog.price_to')} className="w-full rounded-md border border-line bg-white px-2 py-1.5 text-sm" />
-                  <button type="submit" className="rounded-md bg-ink px-2.5 py-1.5 text-sm text-white">→</button>
-                </form>
-              </fieldset>
-
-              <fieldset>
-                <legend className="mb-2 text-sm font-semibold text-ink">{t('catalog.units')}</legend>
-                <div className="flex flex-wrap gap-1.5">
-                  {data.facets.units.slice(0, 12).map((u) => {
-                    const on = filters.unit?.includes(u.value) ?? false;
-                    return (
-                      <button key={u.value} type="button" aria-pressed={on} onClick={() => update({ unit: toggleIn(filters.unit, u.value) })}
-                        className={cx('rounded-full border px-2.5 py-1 text-xs', on ? 'border-ink bg-ink text-white' : 'border-line bg-white text-ink hover:border-ink')}>
-                        {u.value} <span className={on ? 'text-white/70' : 'text-ink-faint'}>{u.count}</span>
-                      </button>
-                    );
-                  })}
-                </div>
               </fieldset>
 
               <label className="flex cursor-pointer items-center gap-2 text-sm text-ink">
@@ -194,7 +157,7 @@ export function CatalogPage({ route }: { route: Route }) {
                 ))}
               </div>
               {data.pagination.total_pages > 1 && (
-                <nav className="mt-8 flex items-center justify-center gap-3" aria-label="Pagination">
+                <nav className="mt-8 flex items-center justify-center gap-3" aria-label={t('a11y.pagination')}>
                   <Button variant="ghost" disabled={data.pagination.page <= 1} onClick={() => navigate('/', toQuery({ ...filters, page: data.pagination.page - 1 }))}>
                     ← {t('catalog.prev')}
                   </Button>

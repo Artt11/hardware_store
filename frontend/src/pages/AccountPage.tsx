@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Building2, LogOut } from 'lucide-react';
 import { ApiError, api } from '../api/client';
-import { formatAmd, type OrderDetail, type OrderPage } from '../api/types';
+import type { OrderDetail, OrderPage } from '../api/types';
 import { Button, Notice, Price, Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
 import { href, navigate } from '../router';
@@ -14,7 +14,7 @@ function StatusPill({ status }: { status: string }) {
 }
 
 export function AccountPage({ orderNumber }: { orderNumber?: string }) {
-  const { t } = useI18n();
+  const { t, money } = useI18n();
   const { user, ready, logout } = useAuth();
   const [orders, setOrders] = useState<OrderPage | null>(null);
   const [order, setOrder] = useState<OrderDetail | null>(null);
@@ -52,7 +52,7 @@ export function AccountPage({ orderNumber }: { orderNumber?: string }) {
           <div className="flex gap-2 rounded-lg bg-canvas p-3 text-sm">
             <Building2 className="mt-0.5 h-4 w-4 shrink-0 text-ink" aria-hidden />
             <div>
-              <p className="text-ink">ՀՎՀՀ {user.tax_id}</p>
+              <p className="text-ink">{t('auth.tax_id')} {user.tax_id}</p>
               <p className="mt-1 text-ink-soft">{user.is_b2b ? t('account.b2b_active') : t('account.b2b_pending')}</p>
             </div>
           </div>
@@ -81,16 +81,16 @@ export function AccountPage({ orderNumber }: { orderNumber?: string }) {
                     <li key={item.product_id} className="flex justify-between gap-3 px-5 py-3 text-sm">
                       <span className="min-w-0">
                         <span className="block text-ink">{item.name_snapshot}</span>
-                        <span className="text-xs text-ink-faint">{item.sku_snapshot} · {item.quantity} × {formatAmd(item.unit_price)}</span>
+                        <span className="text-xs text-ink-faint">{item.sku_snapshot} · {item.quantity} × {money(item.unit_price)}</span>
                       </span>
                       <Price value={item.line_total} className="text-sm" />
                     </li>
                   ))}
                 </ul>
                 <dl className="space-y-1 border-t border-line p-5 text-sm">
-                  <div className="flex justify-between"><dt className="text-ink-soft">{t('cart.subtotal')}</dt><dd>{formatAmd(order.subtotal)}</dd></div>
-                  <div className="flex justify-between"><dt className="text-ink-soft">{t('cart.shipping')}</dt><dd>{formatAmd(order.shipping_amount)}</dd></div>
-                  <div className="flex justify-between pt-1 text-base font-semibold"><dt>{t('checkout.total')}</dt><dd>{formatAmd(order.total_amount)}</dd></div>
+                  <div className="flex justify-between"><dt className="text-ink-soft">{t('cart.subtotal')}</dt><dd>{money(order.subtotal)}</dd></div>
+                  <div className="flex justify-between"><dt className="text-ink-soft">{t('cart.shipping')}</dt><dd>{money(order.shipping_amount)}</dd></div>
+                  <div className="flex justify-between pt-1 text-base font-semibold"><dt>{t('checkout.total')}</dt><dd>{money(order.total_amount)}</dd></div>
                   {order.payment_due_at && <p className="pt-2 text-ink-soft">{t('order.due', { date: new Date(order.payment_due_at).toLocaleDateString() })}</p>}
                 </dl>
               </div>

@@ -9,7 +9,7 @@ import { useWishlist } from '../state/wishlist';
 import { Price, ProductImage, StockBadge, cx } from './ui';
 
 export function ProductCard({ product, eager }: { product: ProductSummary; eager?: boolean }) {
-  const { t } = useI18n();
+  const { t, unit } = useI18n();
   const { quantityOf, setQuantity, open } = useCart();
   const { ids, toggle } = useWishlist();
   const [busy, setBusy] = useState(false);
@@ -56,7 +56,7 @@ export function ProductCard({ product, eager }: { product: ProductSummary; eager
           {product.name}
         </a>
         <div className="flex items-center justify-between gap-2 text-xs text-ink-faint">
-          <span>{product.unit_of_measure}</span>
+          <span>{unit(product.unit_of_measure)}</span>
           <StockBadge inStock={product.in_stock} available={product.available_quantity} />
         </div>
         <div className="mt-auto flex items-end justify-between gap-2 pt-1">
