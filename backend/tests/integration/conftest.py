@@ -50,7 +50,7 @@ async def _recreate_database(url: URL) -> None:
         await conn.execute(f'DROP DATABASE IF EXISTS "{url.database}" WITH (FORCE)')
         # UTF-8 ctype is required: under the C locale pg_trgm and ILIKE ignore Armenian letters.
         await conn.execute(
-            f'CREATE DATABASE "{url.database}" TEMPLATE template0 ENCODING \'UTF8\' '
+            f"CREATE DATABASE \"{url.database}\" TEMPLATE template0 ENCODING 'UTF8' "
             f"LC_COLLATE '{DB_LOCALE}' LC_CTYPE '{DB_LOCALE}'"
         )
     finally:
