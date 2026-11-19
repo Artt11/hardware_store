@@ -1,62 +1,108 @@
-from pydantic import BaseModel, Field, model_validator
-from typing import Optional, Literal
-from uuid import UUID
+"""Auth request/response schemas. Validation happens here, at the boundary."""
+
+import re
+import uuid
 from datetime import datetime
+from typing import Literal, Self
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+
+from app.core.security import MAX_PASSWORD_BYTES
+
+HVHH_REGEX = re.compile(r"^[0-9]{8}$")  # ASCII digits only: \d would accept Arabic-Indic digits
+PHONE_REGEX = re.compile(r"^\+?[0-9 ()-]{6,20}$")
+MIN_PASSWORD_LENGTH = 10
+
+
+def _clean(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = " ".join(value.split())
+    return stripped or None
+
 
 class RegisterRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
     account_type: Literal["individual", "company"] = "individual"
-    email: str = Field(..., pattern=r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$", description="Valid email address")
-    password: str = Field(..., min_length=8, max_length=128, description="Minimum 8 characters with numbers and symbols")
-    
-    # B2C Individual fields
-    first_name: Optional[str] = Field(None, max_length=100)
-    last_name: Optional[str] = Field(None, max_length=100)
-    
-    # B2B Company fields
-    company_name: Optional[str] = Field(None, max_length=150)
-    tax_id: Optional[str] = Field(None, max_length=50, description="Tax ID / VAT number for business invoicing")
-    contact_person: Optional[str] = Field(None, max_length=100)
-    phone: Optional[str] = Field(None, max_length=30)
+    email: EmailStr
+    password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_BYTES)
+    first_name: str | None = Field(default=None, max_length=100)
+    last_name: str | None = Field(default=None, max_length=100)
+    phone: str | None = Field(default=None, max_length=30)
+    company_name: str | None = Field(default=None, max_length=150)
+    tax_id: str | None = Field(default=None, max_length=8)
+    contact_person: str | None = Field(default=None, max_length=100)
+
+    @field_validator("password")
+    @classmethod
+    def _password_fits_bcrypt(cls, value: str) -> str:
+        if len(value.encode()) > MAX_PASSWORD_BYTES:
+            raise ValueError(f"Password must be at most {MAX_PASSWORD_BYTES} bytes")
+        if not (any(c.isalpha() for c in value) and any(c.isdigit() for c in value)):
+            raise ValueError("Password must contain letters and digits")
+        return value
+
+    @field_validator("first_name", "last_name", "company_name", "contact_person")
+    @classmethod
+    def _normalize_text(cls, value: str | None) -> str | None:
+        return _clean(value)
+
+    @field_validator("phone")
+    @classmethod
+    def _valid_phone(cls, value: str | None) -> str | None:
+        if value is not None and value != "" and not PHONE_REGEX.match(value):
+            raise ValueError("Invalid phone number")
+        return value or None
+
+    @field_validator("tax_id")
+    @classmethod
+    def _valid_hvhh(cls, value: str | None) -> str | None:
+        if value is not None and value != "" and not HVHH_REGEX.match(value):
+            raise ValueError("ՀՎՀՀ (tax ID) must be exactly 8 digits")
+        return value or None
 
     @model_validator(mode="after")
-    def validate_b2b_or_b2c_fields(self):
-        # Strict validation ensuring B2B companies provide legal business identity
+    def _required_fields_for_account_type(self) -> Self:
         if self.account_type == "company":
-            if not self.company_name or not self.company_name.strip():
-                raise ValueError("Company Name is required for Company (B2B) registration.")
-            if not self.tax_id or not self.tax_id.strip():
-                raise ValueError("Tax ID / VAT Number is required for Company (B2B) registration.")
-            if not self.contact_person or not self.contact_person.strip():
-                raise ValueError("Authorized Contact Person is required for Company (B2B) registration.")
+            missing = [f for f in ("company_name", "tax_id", "contact_person") if not getattr(self, f)]
+            if missing:
+                raise ValueError(f"Required for company accounts: {', '.join(missing)}")
         else:
-            if not self.first_name or not self.first_name.strip():
-                raise ValueError("First Name is required for Individual registration.")
-            if not self.last_name or not self.last_name.strip():
-                raise ValueError("Last Name is required for Individual registration.")
+            if not self.first_name or not self.last_name:
+                raise ValueError("first_name and last_name are required")
+            if self.company_name or self.tax_id:
+                raise ValueError("Company fields are only allowed for company accounts")
         return self
 
+
 class LoginRequest(BaseModel):
-    email: str = Field(..., pattern=r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
-    password: str
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=MAX_PASSWORD_BYTES)
 
-class TokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    expires_in: int = 900 # 15 minutes in seconds
+    @field_validator("password")
+    @classmethod
+    def _password_fits_bcrypt(cls, value: str) -> str:
+        # Rejected here, for every email alike, so bcrypt's 72-byte limit cannot
+        # create a fast path that reveals which accounts exist.
+        if len(value.encode("utf-8", errors="replace")) > MAX_PASSWORD_BYTES:
+            raise ValueError(f"Password must be at most {MAX_PASSWORD_BYTES} bytes")
+        return value
 
-class UserProfileResponse(BaseModel):
-    id: UUID
+
+class UserProfile(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
     email: str
     account_type: Literal["individual", "company"]
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    company_name: Optional[str] = None
-    tax_id: Optional[str] = None
-    contact_person: Optional[str] = None
-    phone: Optional[str] = None
     role: str
-    is_active: bool
+    first_name: str | None
+    last_name: str | None
+    phone: str | None
+    company_name: str | None
+    tax_id: str | None
+    contact_person: str | None
+    is_verified: bool
+    is_b2b: bool = Field(description="Approved company account: wholesale prices and invoicing")
     created_at: datetime
-
-    class Config:
-        from_attributes = True

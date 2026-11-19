@@ -5,6 +5,7 @@ database password, insecure cookies, or localhost CORS origins.
 """
 
 import logging
+import re
 import secrets
 from functools import cached_property
 from typing import Literal
@@ -23,7 +24,7 @@ WEAK_SECRETS = {
     "replace_with_distinct_64_char_hex_refresh_secret_key",
 }
 MIN_SECRET_LENGTH = 32
-MIN_DISTINCT_CHARS = 10
+MIN_DISTINCT_CHARS = 16
 
 
 def _is_strong(value: str) -> bool:
@@ -44,7 +45,8 @@ class Settings(BaseSettings):
 
     PROJECT_NAME: str = "Suro Hardware Store API"
     API_V1_PREFIX: str = "/api/v1"
-    ENVIRONMENT: Literal["development", "test", "production"] = "development"
+    # Required, no default: forgetting it must fail closed, not run dev settings in production.
+    ENVIRONMENT: Literal["development", "test", "production"]
 
     POSTGRES_USER: str = "postgres"
     POSTGRES_PASSWORD: SecretStr = SecretStr("")
@@ -68,7 +70,9 @@ class Settings(BaseSettings):
     RATE_LIMIT_LOGIN_MAX: int = 5
     RATE_LIMIT_REGISTER_MAX: int = 5
     RATE_LIMIT_CHECKOUT_MAX: int = 10
-    RATE_LIMIT_WINDOW_SECONDS: int = 60
+    RATE_LIMIT_WINDOW_SECONDS: int = Field(default=60, ge=1, le=3600)
+    # Requests from these proxy IPs may set X-Forwarded-For; everyone else is keyed by peer IP.
+    TRUSTED_PROXY_IPS: list[str] = []
     LOGIN_LOCKOUT_THRESHOLD: int = 10
     LOGIN_LOCKOUT_MINUTES: int = 15
 
@@ -81,6 +85,20 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT == "production"
+
+    @property
+    def jwt_audience(self) -> str:
+        """Tokens from one environment are rejected by another even if secrets leak across."""
+        return f"suro-api:{self.ENVIRONMENT}"
+
+    @property
+    def access_cookie_path(self) -> str:
+        # __Host- cookies (production) must use Path=/.
+        return "/" if self.is_production else "/api"
+
+    @property
+    def refresh_cookie_path(self) -> str:
+        return "/" if self.is_production else f"{self.API_V1_PREFIX}/auth"
 
     @cached_property
     def DATABASE_URL(self) -> str:  # noqa: N802 - settings-style name
@@ -109,11 +127,19 @@ class Settings(BaseSettings):
                 errors.append("JWT_SECRET and JWT_REFRESH_SECRET must differ")
             if not self.POSTGRES_PASSWORD.get_secret_value():
                 errors.append("POSTGRES_PASSWORD is required in production")
-            if any("localhost" in o or "127.0.0.1" in o for o in self.CORS_ORIGINS):
-                errors.append("CORS_ORIGINS must not contain localhost in production")
+            if not self.CORS_ORIGINS:
+                errors.append("CORS_ORIGINS must list the storefront origin in production")
+            for origin in self.CORS_ORIGINS:
+                if not re.fullmatch(r"https://[a-z0-9.-]+(:[0-9]{1,5})?", origin) or "localhost" in origin:
+                    errors.append(f"CORS_ORIGINS entry {origin!r} must be a bare https:// origin")
             if errors:
                 raise ValueError("; ".join(errors))
             self.COOKIE_SECURE = True
+            # __Host- prefix: Secure, Path=/, no Domain, so sibling subdomains cannot plant cookies.
+            for name in ("ACCESS_COOKIE_NAME", "REFRESH_COOKIE_NAME"):
+                value = getattr(self, name)
+                if not value.startswith("__Host-"):
+                    setattr(self, name, f"__Host-{value}")
             return self
 
         # Development/test: ephemeral secrets keep the app runnable without a .env.

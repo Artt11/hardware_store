@@ -8,7 +8,7 @@ SQLAlchemy[asyncio]==2.1.9
 asyncpg==0.32.0
 alembic==1.20.1
 bcrypt==5.0.0
-python-jose[cryptography]==3.5.0  # replaced by PyJWT in Phase 2 (audit R7)
+PyJWT==2.15.1
 cachetools==8.0.1
 openpyxl==3.1.5
 defusedxml==0.7.1

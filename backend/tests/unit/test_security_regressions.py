@@ -6,9 +6,10 @@ from typing import Any
 import httpx
 import pytest
 
-from app.api.v1.endpoints.search import highlight_match
 from app.core.database import get_db_session
+from app.core.middleware import limiter
 from app.main import app
+from app.api.v1.endpoints.search import highlight_match
 
 
 class _EmptyResult:
@@ -21,6 +22,9 @@ class _EmptyResult:
     def all(self) -> list[Any]:
         return []
 
+    def first(self) -> None:
+        return None
+
 
 class _RecordingSession:
     """Fake AsyncSession with no users in it that records every object added."""
@@ -30,6 +34,9 @@ class _RecordingSession:
 
     async def execute(self, *_args: Any, **_kwargs: Any) -> _EmptyResult:
         return _EmptyResult()
+
+    async def scalar(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
 
     def add(self, obj: Any) -> None:
         self.added.append(obj)
@@ -46,6 +53,7 @@ class _RecordingSession:
 
 @pytest.fixture
 async def client() -> AsyncIterator[httpx.AsyncClient]:
+    limiter.reset()  # the login rate limit is process-wide; isolate from other tests
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c

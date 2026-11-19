@@ -1,6 +1,7 @@
 """Users: B2C individuals and B2B companies.
 
-`account_type` alone decides B2B status (wholesale pricing, invoicing, credit).
+B2B status (wholesale pricing, invoicing, credit) requires account_type='company'
+AND is_verified: self-registered companies stay retail until approved.
 `role` only distinguishes staff (admin) from customers.
 """
 
@@ -59,6 +60,8 @@ class User(UUIDPrimaryKey, Timestamps, Base):
     payment_terms_days: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
 
     token_version: Mapped[int] = mapped_column(Integer, server_default="1", nullable=False)
+    # jti of the only refresh token that may be used next; reuse of an older one revokes all sessions.
+    refresh_token_jti: Mapped[str | None] = mapped_column(String(32))
     failed_login_attempts: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -71,7 +74,9 @@ class User(UUIDPrimaryKey, Timestamps, Base):
 
     @property
     def is_b2b(self) -> bool:
-        return self.account_type == "company"
+        """Approved company account: gets wholesale prices and invoice payment.
+        Self-registered companies stay retail until staff verify them."""
+        return self.account_type == "company" and self.is_verified
 
     @property
     def display_name(self) -> str:

@@ -7,8 +7,8 @@ from pydantic import ValidationError
 
 from app.core.config import Settings
 
-STRONG_A = "a" * 24 + "B7c9D1e3F5g7H9j1K3m5N7p9"
-STRONG_B = "z" * 24 + "Q2w4E6r8T0y2U4i6O8p0A2s4"
+STRONG_A = "aB7c9D1e3F5g7H9j1K3m5N7p9qRsTuVwXyZ0"
+STRONG_B = "zQ2w4E6r8T0y2U4i6O8p0A2s4dFgHjKlMnBv"
 
 
 def prod(**overrides: Any) -> Settings:
@@ -68,3 +68,28 @@ def test_database_url_escapes_special_characters_in_password() -> None:
 
 def test_secrets_are_not_shown_in_repr() -> None:
     assert STRONG_A not in repr(prod())
+
+
+@pytest.mark.parametrize(
+    "origin", ["*", "null", "http://suro.am", "https://suro.am/path", "https://localhost"]
+)
+def test_production_rejects_unsafe_cors_origins(origin: str) -> None:
+    with pytest.raises(ValidationError, match="CORS_ORIGINS"):
+        prod(CORS_ORIGINS=[origin])
+
+
+def test_environment_is_required() -> None:
+    with pytest.raises(ValidationError, match="ENVIRONMENT"):
+        Settings(_env_file=None, _env_prefix="NO_SUCH_PREFIX_")
+
+
+def test_production_uses_host_prefixed_cookies_with_root_path() -> None:
+    s = prod()
+    assert s.ACCESS_COOKIE_NAME.startswith("__Host-")
+    assert s.REFRESH_COOKIE_NAME.startswith("__Host-")
+    assert s.access_cookie_path == s.refresh_cookie_path == "/"
+
+
+def test_low_entropy_secret_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="JWT_SECRET"):
+        prod(JWT_SECRET="abcdefghij" * 4)
