@@ -20,7 +20,7 @@ performance-optimization, frontend-ui-engineering. Severity per code-review skil
 | # | Finding | Where | Fix in |
 |---|---------|-------|--------|
 | ~~R1~~ ✅ `b691be7` | Revoked/deactivated sessions still work on cart, checkout and wishlist: those routes only decode the JWT; `token_version`/`is_active` checked in `/auth/me` and `/refresh` only. Optional-auth helper swallows every error. | `security.py:130-154`, `cart.py:49-57`, `wishlist.py` | P2 (single `get_current_user` dependency hitting DB) |
-| ~~R2~~ ✅ `b691be7 (backend; frontend in Phase 4)` | Access token returned in JSON and sent as `Authorization: Bearer`; spec requires both tokens exclusively in HttpOnly cookies. | `auth.py`, `AuthContext.tsx` | P2 + P4 |
+| ~~R2~~ ✅ `b691be7`, `1230ade` | Access token returned in JSON and sent as `Authorization: Bearer`; spec requires both tokens exclusively in HttpOnly cookies. | `auth.py`, `AuthContext.tsx` | P2 + P4 |
 | ~~R3~~ ✅ `acbea48` | Search autocomplete builds HTML (`<mark>`) from unescaped product names; frontend renders it with `dangerouslySetInnerHTML`. Stored XSS as soon as names are editable. | `search.py:218-226`, `Header.tsx:528` | **Now** (escape) ; P3 return match offsets instead of HTML |
 | ~~R4~~ ✅ `d060134` | Stock stored twice (`products.stock_quantity` vs `inventory.quantity_on_hand`); checkout validates one and clamps the other with `max(0, …)`, so they drift. | models, `cart.py:430-437` | P1 T4 |
 | ~~R5~~ ✅ `b691be7` | Login timing leaks which emails exist (no bcrypt work when user missing). `failed_login_attempts` counted but never enforced. | `auth.py:611-625` | P2 |
@@ -28,8 +28,8 @@ performance-optimization, frontend-ui-engineering. Severity per code-review skil
 | ~~R7~~ ✅ `ca91cb1`, `b691be7` | `python-jose` is unmaintained with known CVEs (CVE-2024-33663 algorithm confusion, CVE-2024-33664 JWE DoS). Unused deps shipped: `passlib`, `elasticsearch`, `psycopg2-binary`, `pandas`. | `requirements.txt` | P2 (PyJWT), P1 T1 (prune) |
 | ~~R8~~ ✅ `86b7093` | DB layer silently tries 7 DSNs including hardcoded passwords; app keeps running without a DB. | `core/database.py:27-82` | P2 |
 | ~~R9~~ ✅ `b691be7` | In-memory rate limiter + multi-worker Uvicorn = limit × workers; behind a proxy every client shares one IP. | `middleware.py` | P2 (document limit or move to Postgres/Redis) |
-| R10 | Frontend loads catalog from static `products_catalog.json`, falls back to `/products?limit=250` → 1,141 of 1,391 products never shown. Filtering/search done client-side. | `App.tsx:485-510` | P4 |
-| R11 | Checkout from frontend sends no credentials → B2B users charged retail, orders not linked to account. Order history kept only in browser state. Cart only in localStorage. | `App.tsx:688`, `CartDrawer.tsx` | P4 |
+| ~~R10~~ ✅ `1230ade` | Frontend loads catalog from static `products_catalog.json`, falls back to `/products?limit=250` → 1,141 of 1,391 products never shown. Filtering/search done client-side. | `App.tsx:485-510` | P4 |
+| ~~R11~~ ✅ `1230ade` | Checkout from frontend sends no credentials → B2B users charged retail, orders not linked to account. Order history kept only in browser state. Cart only in localStorage. | `App.tsx:688`, `CartDrawer.tsx` | P4 |
 | R12 | Docker: Dockerfile healthcheck hits `/api/v1/health` (route is `/health`) → container never healthy; compose mounts `schema.sql` into initdb **and** runs Alembic; seeds on every start; Elasticsearch exposed with security disabled; mounts the wrong Excel file; single Uvicorn worker; `build-essential` left in runtime image. | `backend/Dockerfile`, `docker-compose.yml` | P5 |
 | ~~R13~~ ✅ `bf99586` | ~1,100 lines of commented-out previous implementations in `auth.py` (1-377), `products.py`, `search.py`. | endpoints | P2/P3 (deleted with rewrite) |
 
