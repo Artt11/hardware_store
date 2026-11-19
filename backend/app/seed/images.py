@@ -90,8 +90,10 @@ def _relationships(zf: zipfile.ZipFile, part: str) -> dict[str, str]:
         target = rel.get("Target", "")
         if rel.get("TargetMode") == "External" or not target:
             continue
-        resolved = target.lstrip("/") if target.startswith("/") else posixpath.normpath(
-            posixpath.join(folder, target)
+        resolved = (
+            target.lstrip("/")
+            if target.startswith("/")
+            else posixpath.normpath(posixpath.join(folder, target))
         )
         rels[rel.get("Id", "")] = resolved
     return rels
