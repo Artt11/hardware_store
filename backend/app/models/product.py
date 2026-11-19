@@ -1,121 +1,87 @@
-"""
-Category, Product & ProductVariant ORM Models (`categories`, `products`, `product_variants`).
-Inherits from declarative `Base` and models the B2C/B2B hardware catalog.
-"""
+"""Catalog: categories and products. Stock lives in `inventory`, not here."""
 
 import uuid
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, Integer, Numeric, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base
+from app.models.base import Base, Money, Timestamps, UUIDPrimaryKey
 
 if TYPE_CHECKING:
     from app.models.inventory import Inventory
-    from app.models.order import OrderItem
 
 
-class Category(Base):
+class Category(UUIDPrimaryKey, Timestamps, Base):
     __tablename__ = "categories"
 
-    parent_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("categories.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    name: Mapped[str] = mapped_column(String(150), nullable=False, index=True)
-    slug: Mapped[str] = mapped_column(String(160), unique=True, nullable=False, index=True)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    slug: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    display_order: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, server_default=text("true"), nullable=False)
 
-    products: Mapped[List["Product"]] = relationship("Product", back_populates="category_rel")
+    products: Mapped[list["Product"]] = relationship(back_populates="category", lazy="raise")
 
 
-class Product(Base):
+class Product(UUIDPrimaryKey, Timestamps, Base):
     __tablename__ = "products"
-
-    category_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("categories.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
+    __table_args__ = (
+        CheckConstraint("retail_price >= 0", name="retail_price_non_negative"),
+        # NULL wholesale price means "B2B pays retail"; never 0 (that would be free).
+        CheckConstraint(
+            "wholesale_price IS NULL OR (wholesale_price > 0 AND wholesale_price <= retail_price)",
+            name="wholesale_price_valid",
+        ),
+        CheckConstraint("compare_at_price IS NULL OR compare_at_price >= 0", name="compare_at_non_negative"),
+        CheckConstraint("discount_percent BETWEEN 0 AND 100", name="discount_percent_range"),
+        CheckConstraint("currency = 'AMD'", name="currency_amd"),
+        # pg_trgm GIN indexes back ILIKE '%term%' and similarity() search on name/sku.
+        # Requires a UTF-8 database locale, otherwise Armenian letters produce no trigrams.
+        Index(
+            "ix_products_name_trgm", "name", postgresql_using="gin", postgresql_ops={"name": "gin_trgm_ops"}
+        ),
+        Index("ix_products_sku_trgm", "sku", postgresql_using="gin", postgresql_ops={"sku": "gin_trgm_ops"}),
+        Index(
+            "ix_products_specifications",
+            "specifications",
+            postgresql_using="gin",
+            postgresql_ops={"specifications": "jsonb_path_ops"},
+        ),
+        Index("ix_products_active_category_price", "is_active", "category_id", "retail_price"),
     )
-    sku: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("categories.id", ondelete="RESTRICT"), nullable=False
+    )
+    sku: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    slug: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(500), nullable=False)
-    slug: Mapped[Optional[str]] = mapped_column(String(320), unique=True, nullable=True, index=True)
-    unit_of_measure: Mapped[str] = mapped_column(String(64), default="հատ", nullable=False)
-    category: Mapped[str] = mapped_column(String(150), default="Uncategorized", nullable=False, index=True)
+    unit_of_measure: Mapped[str] = mapped_column(String(32), server_default="հատ", nullable=False)
 
-    # Dual B2C Retail & B2B Wholesale Pricing (AMD)
-    retail_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False)
-    wholesale_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False)
-    base_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False)
-    compare_at_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
-    discount_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=Decimal("0.00"), nullable=False)
-    currency: Mapped[str] = mapped_column(String(3), default="AMD", nullable=False)
+    retail_price: Mapped[Decimal] = mapped_column(Money, nullable=False)
+    wholesale_price: Mapped[Decimal | None] = mapped_column(Money)
+    compare_at_price: Mapped[Decimal | None] = mapped_column(Money)
+    discount_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), server_default="0", nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), server_default="AMD", nullable=False)
+    vat_applicable: Mapped[bool] = mapped_column(Boolean, server_default=text("true"), nullable=False)
 
-    barcode: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
-    vat_applicable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    image_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    stock_quantity: Mapped[int] = mapped_column(Integer, default=25, nullable=False)
-    low_stock_threshold: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
-    is_published: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    specifications: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
-
-    # Relationships
-    category_rel: Mapped[Optional["Category"]] = relationship("Category", back_populates="products")
-    variants: Mapped[List["ProductVariant"]] = relationship(
-        "ProductVariant",
-        back_populates="product",
-        cascade="all, delete-orphan",
+    barcode: Mapped[str | None] = mapped_column(String(128), index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    image_url: Mapped[str | None] = mapped_column(String(255))
+    specifications: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, server_default=text("'{}'::jsonb"), nullable=False
     )
-    inventory_records: Mapped[List["Inventory"]] = relationship(
-        "Inventory",
-        back_populates="product",
-        cascade="all, delete-orphan",
-    )
-    order_items: Mapped[List["OrderItem"]] = relationship("OrderItem", back_populates="product")
+    is_active: Mapped[bool] = mapped_column(Boolean, server_default=text("true"), nullable=False)
 
-
-class ProductVariant(Base):
-    __tablename__ = "product_variants"
-
-    product_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("products.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    sku: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
-    variant_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    barcode: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-
-    # Dynamic hardware specifications (voltage, thread size, pack qty, finish)
-    attributes: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
-
-    # Retail vs. B2B Trade pricing
-    retail_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False)
-    trade_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False)
-    compare_at_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
-    min_trade_order_qty: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-
-    unit_of_measure: Mapped[str] = mapped_column(String(64), default="հատ", nullable=False)
-    weight_kg: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 3), nullable=True)
-    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-
-    # Relationships
-    product: Mapped["Product"] = relationship("Product", back_populates="variants")
-    inventory_records: Mapped[List["Inventory"]] = relationship(
-        "Inventory",
-        back_populates="variant",
-        cascade="all, delete-orphan",
+    category: Mapped[Category] = relationship(back_populates="products", lazy="raise")
+    inventory: Mapped["Inventory | None"] = relationship(
+        back_populates="product", lazy="raise", uselist=False
     )
 
+    def price_for(self, *, is_b2b: bool) -> tuple[Decimal, str]:
+        """Unit price and pricing tier for a customer type."""
+        if is_b2b and self.wholesale_price is not None:
+            return self.wholesale_price, "wholesale"
+        return self.retail_price, "retail"

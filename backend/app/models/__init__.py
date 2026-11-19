@@ -1,27 +1,22 @@
-"""
-Central export of all SQLAlchemy ORM models so Alembic `Base.metadata`
-automatically discovers every table and foreign key relationship.
-"""
+"""All ORM models, imported here so `Base.metadata` is complete for Alembic."""
 
 from app.models.base import Base
 from app.models.cart import Cart, CartItem
 from app.models.inventory import Inventory
 from app.models.order import Order, OrderItem
-from app.models.product import Category, Product, ProductVariant
+from app.models.product import Category, Product
 from app.models.user import User
-from app.models.wishlist import Wishlist, WishlistItem
+from app.models.wishlist import WishlistItem
 
 __all__ = [
     "Base",
-    "User",
-    "Category",
-    "Product",
-    "ProductVariant",
-    "Inventory",
     "Cart",
     "CartItem",
-    "Wishlist",
-    "WishlistItem",
+    "Category",
+    "Inventory",
     "Order",
     "OrderItem",
+    "Product",
+    "User",
+    "WishlistItem",
 ]
