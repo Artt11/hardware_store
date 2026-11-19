@@ -6,7 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.v1.endpoints import auth, products, search, wishlist
+from app.api.v1.endpoints import auth, commerce, products, search, wishlist
 from app.core.config import settings
 from app.core.database import dispose_engine, ping_database, verify_database_connection
 from app.core.middleware import CSRF_HEADER, SESSION_TOKEN_HEADER, SecurityMiddleware
@@ -62,6 +62,7 @@ app.include_router(auth.router, prefix=settings.API_V1_PREFIX)
 app.include_router(products.router, prefix=settings.API_V1_PREFIX)
 app.include_router(search.router, prefix=settings.API_V1_PREFIX)
 app.include_router(wishlist.router, prefix=settings.API_V1_PREFIX)
+app.include_router(commerce.router, prefix=settings.API_V1_PREFIX)
 
 
 @app.get("/health", tags=["Health"])

@@ -85,7 +85,8 @@ class Order(UUIDPrimaryKey, Timestamps, Base):
     tax_amount: Mapped[Decimal] = mapped_column(Money, server_default="0", nullable=False)
     total_amount: Mapped[Decimal] = mapped_column(Money, nullable=False)
 
-    shipping_address: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # none_as_null: Python None must become SQL NULL, not JSON 'null' (see address_is_object).
+    shipping_address: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
     notes: Mapped[str | None] = mapped_column(Text)
 
     user: Mapped["User | None"] = relationship(back_populates="orders", lazy="raise")
