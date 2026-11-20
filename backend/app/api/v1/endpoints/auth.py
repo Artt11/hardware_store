@@ -44,7 +44,10 @@ def _set_session_cookies(response: Response, user: User) -> None:
         settings.ACCESS_COOKIE_NAME,
         access,
         path=settings.access_cookie_path,
-        max_age=int(default_lifetime("access").total_seconds()),
+        # The cookie outlives the 15-minute JWT on purpose: an expired token must still
+        # reach the API so optional-auth routes answer 401 (client refreshes) instead of
+        # silently treating a signed-in customer as a guest (wrong prices, empty cart).
+        max_age=int(default_lifetime("refresh").total_seconds()),
         **_cookie_options(),
     )
     response.set_cookie(

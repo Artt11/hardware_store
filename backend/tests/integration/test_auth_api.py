@@ -1,6 +1,7 @@
 """Auth API against the real test database (Phase 2c)."""
 
 from collections.abc import AsyncIterator
+from datetime import timedelta
 from typing import Any
 
 import httpx
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db_session
 from app.core.middleware import CSRF_HEADER, limiter
+from app.core.security import create_token
 from app.main import app
 from app.models import User
 
@@ -259,3 +261,27 @@ async def test_login_is_rate_limited(client: httpx.AsyncClient) -> None:
         for _ in range(settings.RATE_LIMIT_LOGIN_MAX + 1)
     ]
     assert codes[-1] == 429
+
+
+# --- Audit C1: expired access token must not silently downgrade to guest ---------------
+
+
+async def test_access_cookie_outlives_the_access_token(client: httpx.AsyncClient) -> None:
+    response = await register(client, individual())
+
+    access = next(c for c in response.headers.get_list("set-cookie") if c.startswith(f"{ACCESS}="))
+    refresh_seconds = settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400
+    assert f"Max-Age={refresh_seconds}" in access
+
+
+async def test_expired_access_token_on_optional_route_is_401_not_guest(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await register(client, individual())
+    user = await db_session.scalar(select(User).where(User.email == "anna@example.com"))
+    assert user is not None
+    expired = create_token(user.id, token_version=user.token_version, kind="access", lifetime=timedelta(seconds=-5))
+    client.cookies.set(ACCESS, expired)
+
+    for path in ("/api/v1/cart", "/api/v1/products"):
+        assert (await client.get(path)).status_code == 401, path
