@@ -11,15 +11,16 @@ Login (hardened after adversarial review):
 4. On success, reset the counter only if the account is still unlocked, so a
    correct parallel guess cannot erase a lock another request just set.
 
-Sessions: tokens carry `token_version` (bumped on logout/revocation). The refresh
-token's jti is stored on the user and rotated on each refresh; presenting an older
-refresh token is treated as theft and revokes every session.
+Sessions: every sign-in creates a `user_sessions` row (one per device). Both tokens
+carry its id (`sid`) and the user's `token_version` (bumped to revoke everything).
+Refresh rotates the row's jti under a row lock; a just-rotated jti stays valid for a
+short grace window (parallel tabs), any other stale jti is treated as theft and
+deletes that session only. See app/models/session.py.
 """
 
-import uuid
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import ColumnElement, case, func, or_, update
+from sqlalchemy import ColumnElement, case, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,9 +32,11 @@ from app.core.security import (
     averify_password_or_dummy,
     create_token,
     decode_token,
+    default_lifetime,
     needs_rehash,
     new_jti,
 )
+from app.models.session import UserSession
 from app.models.user import User
 from app.schemas.auth import RegisterRequest
 
@@ -65,7 +68,6 @@ async def register(db: AsyncSession, data: RegisterRequest) -> User:
         company_name=data.company_name,
         tax_id=data.tax_id,
         contact_person=data.contact_person,
-        refresh_token_jti=new_jti(),
     )
     db.add(user)
     try:
@@ -104,7 +106,6 @@ async def authenticate(db: AsyncSession, email: str, password: str) -> User:
     values: dict[str, object] = {
         "failed_login_attempts": 0,
         "last_login_at": func.now(),
-        "refresh_token_jti": new_jti(),
     }
     if needs_rehash(claimed.password_hash):
         values["password_hash"] = await ahash_password(password)
@@ -119,67 +120,121 @@ async def authenticate(db: AsyncSession, email: str, password: str) -> User:
     return user
 
 
-def issue_tokens(user: User) -> tuple[str, str]:
-    assert user.refresh_token_jti is not None
+async def start_session(db: AsyncSession, user: User) -> UserSession:
+    """Open a refresh session for a new sign-in (and drop this user's expired ones)."""
+    now = datetime.now(UTC)
+    await db.execute(delete(UserSession).where(UserSession.user_id == user.id, UserSession.expires_at <= now))
+    session = UserSession(
+        user_id=user.id, current_jti=new_jti(), expires_at=now + default_lifetime("refresh")
+    )
+    db.add(session)
+    await db.commit()
+    return session
+
+
+def issue_tokens(user: User, session: UserSession) -> tuple[str, str]:
+    version, sid = user.token_version, session.id
     return (
-        create_token(user.id, token_version=user.token_version, kind="access"),
-        create_token(user.id, token_version=user.token_version, kind="refresh", jti=user.refresh_token_jti),
+        create_token(user.id, token_version=version, kind="access", session_id=sid),
+        create_token(user.id, token_version=version, kind="refresh", jti=session.current_jti, session_id=sid),
     )
 
 
 async def user_from_token(db: AsyncSession, token: str | None, *, kind: TokenKind) -> User:
-    """Validate a token against the database: user exists, is active, version matches."""
+    """Validate a token against the database: user exists, is active, version matches,
+    and its session has not been ended (logout, theft) or expired. One query."""
     if not token:
         raise InvalidSession
     try:
         claims = decode_token(token, kind=kind)
     except TokenError:
         raise InvalidSession from None
-    user = await db.get(User, claims.user_id)
-    if user is None or not user.is_active or user.token_version != claims.token_version:
+    if claims.session_id is None:
+        raise InvalidSession
+    user = (
+        await db.execute(
+            select(User)
+            .join(UserSession, UserSession.user_id == User.id)
+            .where(
+                User.id == claims.user_id,
+                User.is_active,
+                User.token_version == claims.token_version,
+                UserSession.id == claims.session_id,
+                UserSession.expires_at > func.now(),
+            )
+        )
+    ).scalar_one_or_none()
+    if user is None:
         raise InvalidSession
     return user
 
 
-async def rotate_refresh(db: AsyncSession, token: str | None) -> User:
-    """Exchange a refresh token for a new pair. Reusing an old one revokes everything."""
+async def rotate_refresh(db: AsyncSession, token: str | None) -> tuple[User, UserSession]:
+    """Exchange a refresh token for a new pair.
+
+    The session row is locked, so simultaneous refreshes with one token serialise:
+    the first rotates, the others find their jti in `previous_jti` within the grace
+    window and receive the rotated session. A stale jti outside the window is a
+    replayed (stolen) token: that session is deleted and the request refused.
+    """
     if not token:
         raise InvalidSession
     try:
         claims = decode_token(token, kind="refresh")
     except TokenError:
         raise InvalidSession from None
-    rotated = (
+    if claims.session_id is None:
+        raise InvalidSession
+
+    session = (
         await db.execute(
-            update(User)
-            .where(
-                User.id == claims.user_id,
-                User.is_active,
-                User.token_version == claims.token_version,
-                User.refresh_token_jti == claims.jti,
-            )
-            .values(refresh_token_jti=new_jti())
-            .returning(User)
+            select(UserSession)
+            .where(UserSession.id == claims.session_id, UserSession.user_id == claims.user_id)
+            .with_for_update()
         )
     ).scalar_one_or_none()
-    if rotated is None:
-        # Valid signature but not the current refresh token: replay of a stolen token,
-        # or a revoked session. Revoke all sessions of that user.
-        await db.execute(
-            update(User)
-            .where(User.id == claims.user_id, User.token_version == claims.token_version)
-            .values(token_version=User.token_version + 1, refresh_token_jti=None)
-        )
+    now = datetime.now(UTC)
+    user = await db.get(User, claims.user_id)
+    if (
+        session is None
+        or session.expires_at <= now
+        or user is None
+        or not user.is_active
+        or user.token_version != claims.token_version
+    ):
+        await db.rollback()
+        raise InvalidSession
+
+    grace = timedelta(seconds=settings.REFRESH_REUSE_GRACE_SECONDS)
+    if claims.jti == session.current_jti:
+        session.previous_jti = session.current_jti
+        session.current_jti = new_jti()
+        session.rotated_at = now
+        session.expires_at = now + default_lifetime("refresh")
+    elif not (
+        claims.jti == session.previous_jti
+        and session.rotated_at is not None
+        and now - session.rotated_at <= grace
+    ):
+        await db.delete(session)  # replay of an old token: end this token family
         await db.commit()
         raise InvalidSession
     await db.commit()
-    return rotated
+    return user, session
 
 
-async def revoke_sessions(db: AsyncSession, user_id: uuid.UUID) -> None:
-    await db.execute(
-        update(User)
-        .where(User.id == user_id)
-        .values(token_version=User.token_version + 1, refresh_token_jti=None)
+async def end_session(db: AsyncSession, token: str | None, *, kind: TokenKind) -> bool:
+    """Delete the session a (possibly expired-access but validly signed) token belongs to."""
+    if not token:
+        return False
+    try:
+        claims = decode_token(token, kind=kind)
+    except TokenError:
+        return False
+    if claims.session_id is None:
+        return False
+    result = await db.execute(
+        delete(UserSession).where(UserSession.id == claims.session_id, UserSession.user_id == claims.user_id)
     )
     await db.commit()
+    return bool(result.rowcount)  # type: ignore[attr-defined]

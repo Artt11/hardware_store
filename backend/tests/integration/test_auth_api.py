@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -14,7 +14,7 @@ from app.core.database import get_db_session
 from app.core.middleware import CSRF_HEADER, limiter
 from app.core.security import create_token
 from app.main import app
-from app.models import User
+from app.models import User, UserSession
 
 PASSWORD = "Strong-pass-2026"
 ACCESS = settings.ACCESS_COOKIE_NAME
@@ -61,6 +61,10 @@ async def client(db_session: AsyncSession) -> AsyncIterator[httpx.AsyncClient]:
 
 async def register(client: httpx.AsyncClient, body: dict[str, Any]) -> httpx.Response:
     return await client.post("/api/v1/auth/register", json=body)
+
+
+async def login(client: httpx.AsyncClient, email: str = "anna@example.com") -> httpx.Response:
+    return await client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
 
 
 async def test_register_sets_httponly_cookies_and_returns_no_tokens(client: httpx.AsyncClient) -> None:
@@ -126,10 +130,10 @@ async def test_login_then_me(client: httpx.AsyncClient) -> None:
     await register(client, individual())
     client.cookies.clear()
 
-    login = await client.post("/api/v1/auth/login", json={"email": "Anna@Example.com", "password": PASSWORD})
+    signed_in = await login(client, "Anna@Example.com")
     me = await client.get("/api/v1/auth/me")
 
-    assert login.status_code == 200
+    assert signed_in.status_code == 200
     assert me.status_code == 200
     assert me.json()["email"] == "anna@example.com"
 
@@ -163,16 +167,85 @@ async def test_account_locks_after_repeated_failures(
     assert user.locked_until is not None
 
 
-async def test_refresh_token_reuse_revokes_all_sessions(client: httpx.AsyncClient) -> None:
+async def _age_rotation(db_session: AsyncSession, seconds: int) -> None:
+    """Pretend every session rotated `seconds` ago (outside the reuse grace window)."""
+    await db_session.execute(update(UserSession).values(rotated_at=func.now() - timedelta(seconds=seconds)))
+
+
+async def test_refresh_token_reuse_after_grace_revokes_that_session(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
     await register(client, individual())
     stolen = client.cookies.get(REFRESH) or ""
     assert (await client.post("/api/v1/auth/refresh")).status_code == 200  # legitimate rotation
+    current = client.cookies.get(REFRESH) or ""
+    await _age_rotation(db_session, settings.REFRESH_REUSE_GRACE_SECONDS + 5)
 
     client.cookies.clear()
     client.cookies.set(REFRESH, stolen, path="/api/v1/auth")
-    replay = await client.post("/api/v1/auth/refresh")
+    assert (await client.post("/api/v1/auth/refresh")).status_code == 401
 
-    assert replay.status_code == 401
+    # The whole token family is dead: the legitimate holder must sign in again too.
+    client.cookies.clear()
+    client.cookies.set(REFRESH, current, path="/api/v1/auth")
+    assert (await client.post("/api/v1/auth/refresh")).status_code == 401
+
+
+async def test_parallel_tabs_refreshing_the_same_token_both_stay_signed_in(
+    client: httpx.AsyncClient,
+) -> None:
+    """Two tabs share one cookie jar and refresh at the same moment with the same token:
+    within the grace window the late request gets the already-rotated session back."""
+    await register(client, individual())
+    shared = client.cookies.get(REFRESH) or ""
+
+    first = await client.post("/api/v1/auth/refresh")
+    client.cookies.clear()
+    client.cookies.set(REFRESH, shared, path="/api/v1/auth")
+    second = await client.post("/api/v1/auth/refresh")
+
+    assert (first.status_code, second.status_code) == (200, 200)
+    for response in (first, second):  # each tab's new cookies keep working
+        client.cookies.clear()
+        client.cookies.set(ACCESS, response.cookies[ACCESS])
+        assert (await client.get("/api/v1/auth/me")).status_code == 200
+    client.cookies.clear()
+    client.cookies.set(REFRESH, second.cookies[REFRESH], path="/api/v1/auth")
+    assert (await client.post("/api/v1/auth/refresh")).status_code == 200
+
+
+async def test_signing_in_on_a_second_device_keeps_the_first_signed_in(
+    client: httpx.AsyncClient,
+) -> None:
+    await register(client, individual())
+    laptop = dict(client.cookies.items())
+
+    client.cookies.clear()
+    assert (await login(client)).status_code == 200  # phone
+    phone = dict(client.cookies.items())
+
+    for device in (laptop, phone):
+        client.cookies.clear()
+        client.cookies.set(REFRESH, device[REFRESH], path="/api/v1/auth")
+        assert (await client.post("/api/v1/auth/refresh")).status_code == 200
+        assert (await client.get("/api/v1/auth/me")).status_code == 200
+
+
+async def test_logout_ends_only_the_current_device(client: httpx.AsyncClient) -> None:
+    await register(client, individual())
+    laptop_refresh = client.cookies.get(REFRESH) or ""
+
+    client.cookies.clear()
+    await login(client)  # phone
+    phone_access = client.cookies.get(ACCESS) or ""
+    assert (await client.post("/api/v1/auth/logout")).status_code == 204
+
+    client.cookies.clear()
+    client.cookies.set(ACCESS, phone_access)
+    assert (await client.get("/api/v1/auth/me")).status_code == 401  # phone access revoked now
+    client.cookies.clear()
+    client.cookies.set(REFRESH, laptop_refresh, path="/api/v1/auth")
+    assert (await client.post("/api/v1/auth/refresh")).status_code == 200  # laptop unaffected
 
 
 async def test_validation_errors_never_echo_the_password(client: httpx.AsyncClient) -> None:
@@ -280,7 +353,15 @@ async def test_expired_access_token_on_optional_route_is_401_not_guest(
     await register(client, individual())
     user = await db_session.scalar(select(User).where(User.email == "anna@example.com"))
     assert user is not None
-    expired = create_token(user.id, token_version=user.token_version, kind="access", lifetime=timedelta(seconds=-5))
+    session = await db_session.scalar(select(UserSession).where(UserSession.user_id == user.id))
+    assert session is not None
+    expired = create_token(
+        user.id,
+        token_version=user.token_version,
+        kind="access",
+        session_id=session.id,
+        lifetime=timedelta(seconds=-5),
+    )
     client.cookies.set(ACCESS, expired)
 
     for path in ("/api/v1/cart", "/api/v1/products"):

@@ -35,7 +35,7 @@ def test_seed_writes_images_into_the_volume_nginx_serves() -> None:
     images_dir = seed_mounts[volume]
     assert "--images-dir" in seed["command"]
     assert seed["command"][seed["command"].index("--images-dir") + 1] == images_dir
-    assert "/tmp" not in images_dir
+    assert "/tmp" not in images_dir  # noqa: S108 - asserting it is NOT used
 
 
 def test_web_mounts_images_read_only() -> None:

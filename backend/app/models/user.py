@@ -60,8 +60,6 @@ class User(UUIDPrimaryKey, Timestamps, Base):
     payment_terms_days: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
 
     token_version: Mapped[int] = mapped_column(Integer, server_default="1", nullable=False)
-    # jti of the only refresh token that may be used next; reuse of an older one revokes all sessions.
-    refresh_token_jti: Mapped[str | None] = mapped_column(String(32))
     failed_login_attempts: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

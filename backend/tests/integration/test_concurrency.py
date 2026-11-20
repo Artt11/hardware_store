@@ -13,7 +13,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.core.config import settings
-from app.models import Inventory, Order, User
+from app.models import Inventory, Order, User, UserSession
 from app.schemas.commerce import CheckoutRequest
 from app.seed.excel import ProductRow
 from app.seed.run import product_id_for, seed_catalog
@@ -179,3 +179,37 @@ async def test_parallel_wrong_passwords_cannot_race_past_the_lockout(
     assert results.count("ok") == 0
     assert user is not None and user.locked_until is not None
     assert after == "denied"  # still locked: the correct password cannot clear a fresh lock
+
+
+async def test_simultaneous_refreshes_with_one_token_both_succeed(
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    """Two tabs hit /auth/refresh at the same instant with the same cookie. The row lock
+    serialises them; the loser lands in the grace window instead of tripping theft
+    detection and signing the customer out everywhere."""
+    async with sessions() as db:
+        await db.execute(
+            text(
+                "INSERT INTO users (email, password_hash, first_name, last_name) VALUES "
+                "('tabs@example.com', 'x', 'T', 'B')"
+            )
+        )
+        user = await db.scalar(select(User).where(User.email == "tabs@example.com"))
+        assert user is not None
+        session = await auth_service.start_session(db, user)
+        _, refresh = auth_service.issue_tokens(user, session)
+
+    async def rotate() -> str:
+        async with sessions() as db:
+            try:
+                await auth_service.rotate_refresh(db, refresh)
+                return "ok"
+            except auth_service.InvalidSession:
+                return "revoked"
+
+    results = await asyncio.gather(*(rotate() for _ in range(4)))
+
+    async with sessions() as db:
+        remaining = await db.scalar(select(func.count()).select_from(UserSession))
+    assert results == ["ok"] * 4
+    assert remaining == 1

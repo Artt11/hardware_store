@@ -19,6 +19,7 @@ from app.api.deps import CurrentUser, DbSession, single_cookie
 from app.core.config import settings
 from app.core.middleware import rate_limit
 from app.core.security import TokenKind, default_lifetime
+from app.models.session import UserSession
 from app.models.user import User
 from app.schemas.auth import LoginRequest, RegisterRequest, UserProfile
 from app.services import auth as service
@@ -38,8 +39,8 @@ def _cookie_options() -> dict[str, Any]:
     return {"httponly": True, "secure": settings.COOKIE_SECURE, "samesite": settings.COOKIE_SAMESITE}
 
 
-def _set_session_cookies(response: Response, user: User) -> None:
-    access, refresh = service.issue_tokens(user)
+def _set_session_cookies(response: Response, user: User, session: UserSession) -> None:
+    access, refresh = service.issue_tokens(user, session)
     response.set_cookie(
         settings.ACCESS_COOKIE_NAME,
         access,
@@ -85,7 +86,7 @@ async def register(
     except service.EmailTaken:
         raise HTTPException(status.HTTP_409_CONFLICT, "An account with this email already exists.") from None
     await _merge_guest_cart(db, user, guest_token)
-    _set_session_cookies(response, user)
+    _set_session_cookies(response, user, await service.start_session(db, user))
     return UserProfile.model_validate(user)
 
 
@@ -99,7 +100,7 @@ async def login(
         # One answer for wrong password, unknown email, locked or disabled account.
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password.") from None
     await _merge_guest_cart(db, user, guest_token)
-    _set_session_cookies(response, user)
+    _set_session_cookies(response, user, await service.start_session(db, user))
     return UserProfile.model_validate(user)
 
 
@@ -107,7 +108,7 @@ async def login(
 async def refresh(request: Request, db: DbSession) -> Response:
     """Rotates both tokens. An invalid, revoked or replayed refresh token clears the cookies."""
     try:
-        user = await service.rotate_refresh(db, single_cookie(request, settings.REFRESH_COOKIE_NAME))
+        user, session = await service.rotate_refresh(db, single_cookie(request, settings.REFRESH_COOKIE_NAME))
     except InvalidSession:
         expired = JSONResponse(
             {"detail": "Session expired. Please sign in again."}, status_code=status.HTTP_401_UNAUTHORIZED
@@ -115,25 +116,22 @@ async def refresh(request: Request, db: DbSession) -> Response:
         _clear_session_cookies(expired)
         return expired
     response = JSONResponse(UserProfile.model_validate(user).model_dump(mode="json"))
-    _set_session_cookies(response, user)
+    _set_session_cookies(response, user, session)
     return response
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(request: Request, db: DbSession) -> Response:
-    """Revokes every session of the user (token_version + 1). Always clears cookies."""
+    """Ends this device's session (its access and refresh tokens stop working at once);
+    other devices stay signed in. Always clears cookies."""
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     sources: tuple[tuple[str, TokenKind], ...] = (
         (settings.ACCESS_COOKIE_NAME, "access"),
         (settings.REFRESH_COOKIE_NAME, "refresh"),
     )
     for cookie, kind in sources:
-        try:
-            user = await service.user_from_token(db, single_cookie(request, cookie), kind=kind)
-        except InvalidSession:
-            continue
-        await service.revoke_sessions(db, user.id)
-        break
+        if await service.end_session(db, single_cookie(request, cookie), kind=kind):
+            break
     _clear_session_cookies(response)
     return response
 

@@ -2,7 +2,7 @@
 (https://fastapi.tiangolo.com/tutorial/dependencies/#share-annotated-dependencies).
 
 Authentication reads the HttpOnly access cookie and validates it against PostgreSQL
-on every request (user exists, is active, token_version matches), so logout and
+on every request (user active, token_version and session match), so logout and
 deactivation take effect immediately (audit R1).
 """
 

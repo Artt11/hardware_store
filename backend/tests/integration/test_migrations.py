@@ -21,6 +21,7 @@ EXPECTED_TABLES = {
     "wishlist_items",
     "orders",
     "order_items",
+    "user_sessions",
 }
 
 

@@ -37,6 +37,7 @@ class TokenClaims:
     user_id: uuid.UUID
     token_version: int
     jti: str
+    session_id: uuid.UUID | None = None
 
 
 def hash_password(password: str) -> str:
@@ -92,9 +93,10 @@ def create_token(
     kind: TokenKind,
     lifetime: timedelta | None = None,
     jti: str | None = None,
+    session_id: uuid.UUID | None = None,
 ) -> str:
     now = datetime.now(UTC)
-    claims = {
+    claims: dict[str, object] = {
         "sub": str(user_id),
         "ver": token_version,
         "type": kind,
@@ -103,6 +105,8 @@ def create_token(
         "jti": jti or new_jti(),
         "aud": settings.jwt_audience,
     }
+    if session_id is not None:
+        claims["sid"] = str(session_id)
     return jwt.encode(claims, _secret(kind), algorithm=ALGORITHMS[0])
 
 
@@ -120,8 +124,12 @@ def decode_token(token: str, *, kind: TokenKind) -> TokenClaims:
         version = claims["ver"]
         if not isinstance(version, int) or isinstance(version, bool):
             raise TokenError("invalid token version")
+        sid = claims.get("sid")
         return TokenClaims(
-            user_id=uuid.UUID(str(claims["sub"])), token_version=version, jti=str(claims["jti"])
+            user_id=uuid.UUID(str(claims["sub"])),
+            token_version=version,
+            jti=str(claims["jti"]),
+            session_id=uuid.UUID(str(sid)) if sid is not None else None,
         )
     except (jwt.InvalidTokenError, ValueError, KeyError) as exc:
         raise TokenError(str(exc)) from exc

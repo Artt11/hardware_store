@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: Literal["HS256"] = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=15, ge=1, le=60)
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7, ge=1, le=30)
+    # A just-rotated refresh token is still accepted this long (parallel tabs refreshing at once).
+    REFRESH_REUSE_GRACE_SECONDS: int = Field(default=15, ge=0, le=60)
 
     ACCESS_COOKIE_NAME: str = "suro_access"
     REFRESH_COOKIE_NAME: str = "suro_refresh"
