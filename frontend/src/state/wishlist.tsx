@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api } from '../api/client';
 import type { WishlistItem } from '../api/types';
+import { useI18n } from '../i18n';
 import { useAuth } from './auth';
 
 /**
@@ -12,7 +13,9 @@ const GUEST_KEY = 'suro_guest_wishlist';
 interface WishlistState {
   ids: Set<string>;
   items: WishlistItem[];
+  /** Never rejects: a failed change is reported through `failed` and a status notice. */
   toggle: (productId: string) => Promise<void>;
+  failed: boolean;
 }
 
 const WishlistContext = createContext<WishlistState | null>(null);
@@ -35,24 +38,42 @@ function writeGuest(ids: string[]): void {
 }
 
 export function WishlistProvider({ children }: { children: ReactNode }) {
+  const { t } = useI18n();
   const { user, ready, sessionKey } = useAuth();
   const [items, setItems] = useState<WishlistItem[]>([]);
   const [guestIds, setGuestIds] = useState<string[]>(readGuest);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    if (!ready || !user) return;
+    if (!ready) return;
+    if (!user) {
+      // Signed out (or session expired): never keep the previous account's list on screen.
+      setItems([]);
+      return;
+    }
+    let current = true;
     const pending = readGuest();
     const request = pending.length
       ? api<{ items: WishlistItem[] }>('/wishlist/sync', { method: 'POST', body: { product_ids: pending } })
       : api<{ items: WishlistItem[] }>('/wishlist');
     request
       .then((data) => {
+        if (!current) return; // a newer session replaced this one meanwhile
         setItems(data.items);
         writeGuest([]);
         setGuestIds([]);
       })
       .catch((error: unknown) => console.warn('wishlist load failed', error));
+    return () => {
+      current = false;
+    };
   }, [ready, user, sessionKey]);
+
+  useEffect(() => {
+    if (!failed) return;
+    const timer = window.setTimeout(() => setFailed(false), 4000);
+    return () => window.clearTimeout(timer);
+  }, [failed]);
 
   const ids = useMemo(
     () => new Set(user ? items.map((i) => i.product_id) : guestIds),
@@ -67,19 +88,42 @@ export function WishlistProvider({ children }: { children: ReactNode }) {
         writeGuest(next);
         return;
       }
-      if (ids.has(productId)) {
-        await api(`/wishlist/${productId}`, { method: 'DELETE' });
-        setItems((current) => current.filter((i) => i.product_id !== productId));
-      } else {
-        const data = await api<{ items: WishlistItem[] }>('/wishlist', { method: 'POST', body: { product_id: productId } });
-        setItems(data.items);
+      setFailed(false);
+      try {
+        if (ids.has(productId)) {
+          await api(`/wishlist/${productId}`, { method: 'DELETE' });
+          setItems((current) => current.filter((i) => i.product_id !== productId));
+        } else {
+          const data = await api<{ items: WishlistItem[] }>('/wishlist', {
+            method: 'POST',
+            body: { product_id: productId },
+          });
+          setItems(data.items);
+        }
+      } catch (error) {
+        // Callers fire-and-forget (`void toggle(id)`): an escaping rejection would be unhandled.
+        console.warn('wishlist update failed', error);
+        setFailed(true);
       }
     },
     [user, guestIds, ids],
   );
 
-  const value = useMemo(() => ({ ids, items, toggle }), [ids, items, toggle]);
-  return <WishlistContext.Provider value={value}>{children}</WishlistContext.Provider>;
+  const value = useMemo(() => ({ ids, items, toggle, failed }), [ids, items, toggle, failed]);
+  return (
+    <WishlistContext.Provider value={value}>
+      {children}
+      <div
+        role="status"
+        aria-live="polite"
+        className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom,0px))] z-50 flex justify-center px-4"
+      >
+        {failed && (
+          <p className="rounded-lg bg-ink px-4 py-3 text-sm text-white shadow-lg">{t('wishlist.error')}</p>
+        )}
+      </div>
+    </WishlistContext.Provider>
+  );
 }
 
 export function useWishlist(): WishlistState {
