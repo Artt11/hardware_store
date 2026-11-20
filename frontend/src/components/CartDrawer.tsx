@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Trash2 } from 'lucide-react';
+import { ShoppingCart, Trash2 } from 'lucide-react';
 import { errorMessage } from '../api/client';
 import { toAmount } from '../api/types';
 import { useI18n } from '../i18n';
@@ -34,9 +34,11 @@ export function CartDrawer() {
   return (
     <Modal open={isOpen} onClose={close} title={t('cart.title')} side closeLabel={t('cart.close')}>
       {items.length === 0 ? (
-        <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
-          <p className="text-ink-soft">{t('cart.empty')}</p>
-          <Button variant="secondary" onClick={close}>{t('cart.continue')}</Button>
+        <div className="flex h-full flex-col items-center justify-center px-8 py-16 text-center">
+          <ShoppingCart className="h-9 w-9 text-ink-faint" strokeWidth={1.5} aria-hidden />
+          <p className="mt-4 font-semibold text-ink">{t('cart.empty')}</p>
+          <p className="mt-1 max-w-[32ch] text-sm leading-6 text-ink-soft">{t('cart.empty_hint')}</p>
+          <Button variant="secondary" className="mt-6 h-11" onClick={close}>{t('cart.continue')}</Button>
         </div>
       ) : (
         <div className="flex h-full flex-col">

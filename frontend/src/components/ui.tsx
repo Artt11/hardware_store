@@ -121,7 +121,10 @@ export function ProductImage({
   }
   const Icon = CATEGORY_ICONS[category] ?? Package;
   return (
-    <div className={cx('flex h-full w-full items-center justify-center bg-canvas', className)} role="img" aria-label={alt}>
+    <div
+      className={cx('flex h-full w-full items-center justify-center bg-canvas', className)}
+      {...(alt ? { role: 'img', 'aria-label': alt } : { 'aria-hidden': true })}
+    >
       <Icon className="h-10 w-10 text-ink-faint/70" strokeWidth={1.25} aria-hidden />
     </div>
   );
@@ -134,7 +137,7 @@ export function QuantityStepper({
     <div className="inline-flex items-center rounded-lg border border-line bg-white" role="group" aria-label={label}>
       <button
         type="button"
-        className="grid h-9 w-9 place-items-center text-ink hover:bg-black/5 disabled:opacity-40"
+        className="grid h-11 w-11 place-items-center text-ink transition-colors hover:bg-black/5 active:bg-black/10 disabled:opacity-40"
         onClick={() => onChange(value - 1)}
         disabled={busy || value <= 1}
         aria-label="−1"
@@ -144,7 +147,7 @@ export function QuantityStepper({
       <span className="min-w-8 text-center text-sm font-semibold tabular-nums" aria-live="polite">{value}</span>
       <button
         type="button"
-        className="grid h-9 w-9 place-items-center text-ink hover:bg-black/5 disabled:opacity-40"
+        className="grid h-11 w-11 place-items-center text-ink transition-colors hover:bg-black/5 active:bg-black/10 disabled:opacity-40"
         onClick={() => onChange(value + 1)}
         disabled={busy || value >= max}
         aria-label="+1"

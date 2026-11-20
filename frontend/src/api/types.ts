@@ -52,7 +52,7 @@ export interface ProductPage {
   };
 }
 
-export type SortOption = 'relevance' | 'price_asc' | 'price_desc' | 'name' | 'newest';
+export type SortOption = 'relevance' | 'featured' | 'price_asc' | 'price_desc' | 'name' | 'newest';
 
 export interface CatalogFilters {
   lang?: 'hy' | 'ru' | 'en';

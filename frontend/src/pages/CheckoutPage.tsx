@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { CheckCircle2, Receipt, Store, Truck } from 'lucide-react';
+import { CheckCircle2, Receipt, ShoppingCart, Store, Truck } from 'lucide-react';
 import { ApiError, api, errorMessage } from '../api/client';
 import {
   toAmount, type CheckoutPayload, type DeliveryMethod, type OrderDetail, type PaymentMethod, type StockShortage,
@@ -44,9 +44,16 @@ export function CheckoutPage() {
   const items = cart?.items ?? [];
   if (items.length === 0) {
     return (
-      <div className="mx-auto max-w-xl space-y-4 px-4 py-16 text-center sm:px-6">
-        <p className="text-ink-soft">{t('cart.empty')}</p>
-        <a href={href('/')} className="text-sm font-semibold text-brand-deep hover:underline">{t('cart.continue')} →</a>
+      <div className="mx-auto flex max-w-xl flex-col items-center px-4 py-24 text-center sm:px-6">
+        <ShoppingCart className="h-10 w-10 text-ink-faint" strokeWidth={1.5} aria-hidden />
+        <h1 className="mt-5 text-xl font-semibold text-ink">{t('cart.empty')}</h1>
+        <p className="mt-2 max-w-[40ch] text-sm leading-6 text-ink-soft">{t('checkout.empty_hint')}</p>
+        <a
+          href={href('/')}
+          className="mt-6 inline-flex h-11 items-center rounded-lg bg-ink px-5 text-sm font-semibold text-white transition-[transform,background-color] duration-150 ease-out hover:bg-black active:scale-[0.97]"
+        >
+          {t('cart.continue')}
+        </a>
       </div>
     );
   }

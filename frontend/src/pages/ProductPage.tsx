@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Heart } from 'lucide-react';
+import { Building2, Heart, Store, Truck } from 'lucide-react';
 import { ApiError, api, errorMessage } from '../api/client';
-import type { ProductDetail } from '../api/types';
-import { Button, Notice, Price, ProductImage, QuantityStepper, Spinner, StockBadge, cx } from '../components/ui';
+import type { ProductDetail, ProductPage as ProductList, ProductSummary } from '../api/types';
+import { ProductCard } from '../components/ProductCard';
+import { Button, Notice, Price, ProductImage, QuantityStepper, StockBadge, cx } from '../components/ui';
 import { useI18n } from '../i18n';
 import { href } from '../router';
 import { useAuth } from '../state/auth';
@@ -10,7 +11,7 @@ import { useCart } from '../state/cart';
 import { useWishlist } from '../state/wishlist';
 
 export function ProductPage({ slug }: { slug: string }) {
-  const { t, money, unit, category, name } = useI18n();
+  const { t, money, unit, category, name, lang } = useI18n();
   const { sessionKey } = useAuth();
   const { quantityOf, setQuantity, open } = useCart();
   const { ids, toggle } = useWishlist();
@@ -19,6 +20,7 @@ export function ProductPage({ slug }: { slug: string }) {
   const [qty, setQty] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [related, setRelated] = useState<ProductSummary[]>([]);
 
   useEffect(() => {
     setState('loading');
@@ -27,7 +29,31 @@ export function ProductPage({ slug }: { slug: string }) {
       .catch((e: unknown) => setState(e instanceof ApiError && e.status === 404 ? 'missing' : 'error'));
   }, [slug, sessionKey]);
 
-  if (state === 'loading') return <Spinner label={t('common.loading')} />;
+  const categorySlug = product?.category.slug;
+  useEffect(() => {
+    if (!categorySlug) return;
+    const controller = new AbortController();
+    api<ProductList>('/products', {
+      query: { category: [categorySlug], sort: 'featured', page_size: 5, lang },
+      signal: controller.signal,
+    })
+      .then((page) => setRelated(page.items.filter((p) => p.slug !== slug).slice(0, 4)))
+      .catch(() => setRelated([]));
+    return () => controller.abort();
+  }, [categorySlug, slug, lang]);
+
+  if (state === 'loading') {
+    return (
+      <div className="mx-auto grid max-w-7xl gap-8 px-4 py-12 sm:px-6 md:grid-cols-2" aria-busy="true" aria-label={t('common.loading')}>
+        <div className="aspect-square animate-pulse rounded-card bg-white" />
+        <div className="space-y-4 pt-2">
+          <div className="h-8 w-4/5 animate-pulse rounded bg-white" />
+          <div className="h-4 w-1/4 animate-pulse rounded bg-white" />
+          <div className="h-10 w-1/3 animate-pulse rounded bg-white" />
+        </div>
+      </div>
+    );
+  }
   if (state !== 'ready' || !product) {
     return (
       <div className="mx-auto max-w-3xl space-y-4 px-4 py-16 sm:px-6">
@@ -59,7 +85,7 @@ export function ProductPage({ slug }: { slug: string }) {
       <a href={href(`/?category=${product.category.slug}`)} className="text-sm text-ink-soft hover:text-ink">
         ← {category(product.category.slug, product.category.name)}
       </a>
-      <div className="mt-4 grid gap-8 pb-16 md:grid-cols-2">
+      <div className="mt-4 grid gap-8 pb-12 md:grid-cols-2">
         <div className="aspect-square overflow-hidden rounded-card border border-line bg-white p-6">
           <ProductImage src={product.image_url} alt={name(product)} category={product.category.slug} eager />
         </div>
@@ -94,6 +120,15 @@ export function ProductPage({ slug }: { slug: string }) {
           )}
           {error && <Notice>{error}</Notice>}
 
+          <section className="rounded-card border border-line bg-white p-4" aria-labelledby="delivery-title">
+            <h2 id="delivery-title" className="text-sm font-semibold text-ink">{t('product.delivery_title')}</h2>
+            <ul className="mt-3 space-y-2.5 text-sm text-ink-soft">
+              <li className="flex gap-3"><Truck className="mt-0.5 h-4 w-4 shrink-0 text-ink" aria-hidden />{t('product.delivery_express')}</li>
+              <li className="flex gap-3"><Store className="mt-0.5 h-4 w-4 shrink-0 text-ink" aria-hidden />{t('product.delivery_pickup')}</li>
+              <li className="flex gap-3"><Building2 className="mt-0.5 h-4 w-4 shrink-0 text-ink" aria-hidden />{t('product.delivery_b2b')}</li>
+            </ul>
+          </section>
+
           {product.description && <p className="text-[15px] leading-7 text-ink-soft">{product.description}</p>}
 
           <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 border-t border-line pt-4 text-sm">
@@ -103,6 +138,15 @@ export function ProductPage({ slug }: { slug: string }) {
           </dl>
         </div>
       </div>
+
+      {related.length > 0 && (
+        <section className="border-t border-line pb-20 pt-10" aria-labelledby="related-title">
+          <h2 id="related-title" className="mb-5 text-lg font-semibold text-ink">{t('product.related')}</h2>
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+            {related.map((p) => <ProductCard key={p.id} product={p} />)}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

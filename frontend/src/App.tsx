@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AuthDialog } from './components/AuthDialog';
 import { CartDrawer } from './components/CartDrawer';
 import { Header } from './components/Header';
@@ -11,7 +11,7 @@ import { ProductPage } from './pages/ProductPage';
 import { WishlistPage } from './pages/WishlistPage';
 import { useRoute } from './router';
 import { AuthProvider } from './state/auth';
-import { CartProvider } from './state/cart';
+import { CartProvider, useCart } from './state/cart';
 import { WishlistProvider } from './state/wishlist';
 
 function Shell() {
@@ -19,6 +19,14 @@ function Shell() {
   const route = useRoute();
   const [authOpen, setAuthOpen] = useState(false);
   const openAuth = () => setAuthOpen(true);
+  const { close: closeCart } = useCart();
+  const routeKey = `${route.path}?${route.query.toString()}`;
+
+  // Navigation (links, back button) dismisses overlays instead of leaving them over the new page.
+  useEffect(() => {
+    setAuthOpen(false);
+    closeCart();
+  }, [routeKey, closeCart]);
 
   const segments = route.path.split('/').filter(Boolean);
   let page;

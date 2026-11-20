@@ -20,8 +20,18 @@ export default {
         sans: ['"Noto Sans Armenian"', '"Inter"', 'system-ui', 'sans-serif'],
       },
       borderRadius: { card: '10px' },
-      transitionTimingFunction: { out: 'cubic-bezier(0.16, 1, 0.3, 1)' },
+      // Emil Kowalski's curves: strong ease-out for UI feedback, iOS-like for drawers.
+      transitionTimingFunction: {
+        out: 'cubic-bezier(0.23, 1, 0.32, 1)',
+        drawer: 'cubic-bezier(0.32, 0.72, 0, 1)',
+      },
+      boxShadow: {
+        // One elevation for floating layers (menus, dialogs): offset + soft blur.
+        float: '0 12px 32px -8px rgb(20 23 31 / 0.18), 0 2px 6px -2px rgb(20 23 31 / 0.08)',
+      },
     },
   },
+  // No sticky hover states on touch screens.
+  future: { hoverOnlyWhenSupported: true },
   plugins: [],
 } satisfies Config;
