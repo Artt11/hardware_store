@@ -1,154 +1,135 @@
+"""Password hashing (bcrypt) and JWTs (PyJWT, HS256).
+
+- bcrypt is CPU-bound: async callers must use the `a*` wrappers (asyncio.to_thread).
+- bcrypt only accepts 72 bytes; request schemas enforce MAX_PASSWORD_BYTES.
+- Access and refresh tokens use different secrets and a `type` claim, carry the
+  user's `token_version` as `ver`, and the algorithm list is pinned (no alg=none,
+  no algorithm confusion).
+"""
+
 import asyncio
-from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
-from uuid import UUID
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Literal
+
 import bcrypt
-from jose import jwt, JWTError
-from fastapi import HTTPException, status, Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import jwt
 
 from app.core.config import settings
 
-# HTTP Bearer scheme for Authorization header (Access Token in memory)
-security_bearer = HTTPBearer(auto_error=False)
+BCRYPT_ROUNDS = 12
+MAX_PASSWORD_BYTES = 72
+TokenKind = Literal["access", "refresh"]
+ALGORITHMS = ["HS256"]
+
+# Compared against when the email is unknown, so both paths cost one bcrypt check
+# and response timing does not reveal which emails are registered (audit R5).
+_DUMMY_HASH = bcrypt.hashpw(b"dummy-password-for-timing", bcrypt.gensalt(BCRYPT_ROUNDS))
+
+
+class TokenError(Exception):
+    """Token is missing, malformed, expired, of the wrong kind, or forged."""
+
+
+@dataclass(frozen=True, slots=True)
+class TokenClaims:
+    user_id: uuid.UUID
+    token_version: int
+    jti: str
+    session_id: uuid.UUID | None = None
 
 
 def hash_password(password: str) -> str:
-    """
-    Hashes password using bcrypt with standard salt cost factor (12 rounds).
-    Categorically defends against rainbow table and brute-force attacks.
-    """
-    salt = bcrypt.gensalt(rounds=12)
-    hashed = bcrypt.hashpw(password.encode("utf-8"), salt)
-    return hashed.decode("utf-8")
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt(BCRYPT_ROUNDS)).decode()
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """
-    Verifies a plain password against the stored bcrypt hash.
-    Constant-time comparison prevents timing attacks.
-    """
+def verify_password(password: str, password_hash: str) -> bool:
     try:
-        return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
-    except Exception:
+        return bcrypt.checkpw(password.encode(), password_hash.encode())
+    except ValueError:  # malformed hash or over-long password
         return False
 
 
-async def async_hash_password(password: str) -> str:
-    """
-    ISSUE-03 Fix: Offloads CPU-bound bcrypt password hashing (12 rounds)
-    to a background worker thread so the FastAPI asyncio event loop is never blocked.
-    """
+def needs_rehash(password_hash: str) -> bool:
+    """True when a stored hash uses a different bcrypt cost than BCRYPT_ROUNDS."""
+    return not password_hash.startswith(f"$2b${BCRYPT_ROUNDS:02d}$")
+
+
+def verify_password_or_dummy(password: str, password_hash: str | None) -> bool:
+    if password_hash is None:
+        verify_password(password, _DUMMY_HASH.decode())
+        return False
+    return verify_password(password, password_hash)
+
+
+async def ahash_password(password: str) -> str:
     return await asyncio.to_thread(hash_password, password)
 
 
-async def async_verify_password(plain_password: str, hashed_password: str) -> bool:
-    """
-    ISSUE-03 Fix: Offloads CPU-bound bcrypt password verification
-    to a background worker thread so concurrent requests remain non-blocking.
-    """
-    return await asyncio.to_thread(verify_password, plain_password, hashed_password)
+async def averify_password_or_dummy(password: str, password_hash: str | None) -> bool:
+    return await asyncio.to_thread(verify_password_or_dummy, password, password_hash)
 
 
-def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
-    """
-    Generates short-lived Access Token (15 mins) kept in client memory.
-    """
-    to_encode = data.copy()
-    now = datetime.now(timezone.utc)
-    expire = now + (
-        expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    )
-    to_encode.update({
-        "exp": expire,
+def _secret(kind: TokenKind) -> str:
+    secret = settings.JWT_SECRET if kind == "access" else settings.JWT_REFRESH_SECRET
+    return secret.get_secret_value()
+
+
+def default_lifetime(kind: TokenKind) -> timedelta:
+    if kind == "access":
+        return timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    return timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+
+
+def new_jti() -> str:
+    return uuid.uuid4().hex
+
+
+def create_token(
+    user_id: uuid.UUID,
+    *,
+    token_version: int,
+    kind: TokenKind,
+    lifetime: timedelta | None = None,
+    jti: str | None = None,
+    session_id: uuid.UUID | None = None,
+) -> str:
+    now = datetime.now(UTC)
+    claims: dict[str, object] = {
+        "sub": str(user_id),
+        "ver": token_version,
+        "type": kind,
         "iat": now,
-        "type": "access"
-    })
-    return jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+        "exp": now + (lifetime or default_lifetime(kind)),
+        "jti": jti or new_jti(),
+        "aud": settings.jwt_audience,
+    }
+    if session_id is not None:
+        claims["sid"] = str(session_id)
+    return jwt.encode(claims, _secret(kind), algorithm=ALGORITHMS[0])
 
 
-def create_refresh_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
-    """
-    Generates long-lived Refresh Token (7 days) stored exclusively in HttpOnly, Secure, SameSite=Strict cookies.
-    """
-    to_encode = data.copy()
-    now = datetime.now(timezone.utc)
-    expire = now + (
-        expires_delta or timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-    )
-    to_encode.update({
-        "exp": expire,
-        "iat": now,
-        "type": "refresh"
-    })
-    return jwt.encode(to_encode, settings.JWT_REFRESH_SECRET, algorithm=settings.JWT_ALGORITHM)
-
-
-def decode_access_token(token: str) -> Dict[str, Any]:
-    """
-    Decodes and verifies an access token.
-    """
+def decode_token(token: str, *, kind: TokenKind) -> TokenClaims:
     try:
-        payload = jwt.decode(
-            token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM]
+        claims = jwt.decode(
+            token,
+            _secret(kind),
+            algorithms=ALGORITHMS,
+            audience=settings.jwt_audience,
+            options={"require": ["sub", "ver", "type", "iat", "exp", "aud", "jti"]},
         )
-        if payload.get("type") != "access":
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token type, expected access token."
-            )
-        return payload
-    except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials or token has expired.",
-            headers={"WWW-Authenticate": "Bearer"},
+        if claims["type"] != kind:
+            raise TokenError(f"expected a {kind} token")
+        version = claims["ver"]
+        if not isinstance(version, int) or isinstance(version, bool):
+            raise TokenError("invalid token version")
+        sid = claims.get("sid")
+        return TokenClaims(
+            user_id=uuid.UUID(str(claims["sub"])),
+            token_version=version,
+            jti=str(claims["jti"]),
+            session_id=uuid.UUID(str(sid)) if sid is not None else None,
         )
-
-
-def decode_refresh_token(token: str) -> Dict[str, Any]:
-    """
-    Decodes and verifies a refresh token from HttpOnly cookie.
-    """
-    try:
-        payload = jwt.decode(
-            token, settings.JWT_REFRESH_SECRET, algorithms=[settings.JWT_ALGORITHM]
-        )
-        if payload.get("type") != "refresh":
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid refresh token."
-            )
-        return payload
-    except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Session has expired. Please log in again."
-        )
-
-
-async def get_current_user_payload(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_bearer)
-) -> Dict[str, Any]:
-    """
-    Dependency that extracts and validates the in-memory Bearer token.
-    """
-    if not credentials or not credentials.credentials:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required. Please sign in to access this resource.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return decode_access_token(credentials.credentials)
-
-
-async def get_current_user_id(payload: Dict[str, Any] = Depends(get_current_user_payload)) -> UUID:
-    """
-    Extracts authenticated user UUID.
-    """
-    sub = payload.get("sub")
-    if not sub:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject"
-        )
-    return UUID(sub)
+    except (jwt.InvalidTokenError, ValueError, KeyError) as exc:
+        raise TokenError(str(exc)) from exc

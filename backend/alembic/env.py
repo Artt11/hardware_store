@@ -1,52 +1,44 @@
-"""
-Alembic Migration Environment (`backend/alembic/env.py`).
-Connects Alembic to `app.models.Base.metadata` and dynamically injects
-the database URI from `app.core.config.settings`.
+"""Alembic environment (async, asyncpg).
+
+Follows the Alembic cookbook async recipe:
+https://alembic.sqlalchemy.org/en/latest/cookbook.html#using-asyncio-with-alembic
+
+The database URL comes from application settings, never from alembic.ini. Tests may
+override it with `config.set_main_option("sqlalchemy.url", ...)` or pass an open
+connection via `config.attributes["connection"]`.
 """
 
 import asyncio
-import sys
 from logging.config import fileConfig
-from pathlib import Path
 
-from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-# Ensure `backend/` is on sys.path so `app.*` imports resolve cleanly
-BACKEND_DIR = Path(__file__).resolve().parent.parent
-if str(BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(BACKEND_DIR))
-
-from app.core.config import settings  # noqa: E402
-from app.models import Base  # noqa: E402
+from alembic import context
+from app.core.config import settings
+from app.models import Base
 
 config = context.config
-
-if config.config_file_name is not None:
+if config.config_file_name is not None and config.attributes.get("configure_logger", True):
     fileConfig(config.config_file_name)
 
-# Bind SQLAlchemy Declarative Base metadata for `--autogenerate`
 target_metadata = Base.metadata
 
 
-def get_database_url() -> str:
-    """Return synchronous or async database URL from Pydantic settings."""
-    return settings.SQLALCHEMY_SYNC_DATABASE_URI
+def _database_url() -> str:
+    return config.get_main_option("sqlalchemy.url") or settings.DATABASE_URL
 
 
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode (generates SQL scripts without a live DB connection)."""
-    url = get_database_url()
     context.configure(
-        url=url,
+        url=_database_url(),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        compare_server_default=True,
     )
-
     with context.begin_transaction():
         context.run_migrations()
 
@@ -56,44 +48,30 @@ def do_run_migrations(connection: Connection) -> None:
         connection=connection,
         target_metadata=target_metadata,
         compare_type=True,
+        compare_server_default=True,
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
 async def run_async_migrations() -> None:
-    """Fallback async migration runner using `asyncpg` when `psycopg2` is not installed."""
-    configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = settings.DATABASE_URL
-    connectable = async_engine_from_config(
-        configuration,
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    section = config.get_section(config.config_ini_section, {})
+    section["sqlalchemy.url"] = _database_url()
+    connectable = async_engine_from_config(section, prefix="sqlalchemy.", poolclass=pool.NullPool)
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode using psycopg2 (or asyncpg fallback)."""
-    configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = get_database_url()
-
-    try:
-        connectable = engine_from_config(
-            configuration,
-            prefix="sqlalchemy.",
-            poolclass=pool.NullPool,
-        )
-        with connectable.connect() as connection:
-            do_run_migrations(connection)
-    except ModuleNotFoundError:
+    connection = config.attributes.get("connection")
+    if connection is None:
         asyncio.run(run_async_migrations())
+    else:
+        do_run_migrations(connection)
 
 
 if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
-

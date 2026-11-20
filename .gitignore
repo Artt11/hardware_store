@@ -1,3 +1,6 @@
+# Claude Code local config (memory, session data, skills cache)
+.claude/
+
 # Environment & Secrets (Never commit .env; use .env.example)
 .env
 backend/.env
@@ -20,3 +23,7 @@ ECC-main/
 .agents/
 skills-lock.json
 .DS_Store
+
+# Frontend build output
+dist/
+frontend/dist/

@@ -1,85 +1,67 @@
-"""
-Cart & CartItem ORM Models (`carts`, `cart_items`).
-Persists both authenticated user carts and guest session carts in PostgreSQL.
+"""Persistent carts for signed-in users and guests.
+
+A cart belongs to exactly one owner: a user, or a guest identified by a random
+server-issued token of which only the SHA-256 hex digest is stored. Prices are not
+stored on cart lines: they are computed live and snapshotted onto order lines.
+Guest carts expire; user carts do not.
 """
 
 import uuid
 from datetime import datetime
-from decimal import Decimal
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base
+from app.models.base import Base, Timestamps, UUIDPrimaryKey
 
 if TYPE_CHECKING:
-    from app.models.product import Product, ProductVariant
-    from app.models.user import User
+    from app.models.product import Product
+
+MAX_LINE_QUANTITY = 10_000
 
 
-class Cart(Base):
+class Cart(UUIDPrimaryKey, Timestamps, Base):
     __tablename__ = "carts"
-
-    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-    )
-    session_token: Mapped[Optional[str]] = mapped_column(
-        String(128),
-        unique=True,
-        nullable=True,
-        index=True,
-    )
-    currency: Mapped[str] = mapped_column(String(3), default="AMD", nullable=False)
-    subtotal: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False)
-    tax_total: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False)
-    shipping_total: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False)
-    grand_total: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        nullable=False,
+    __table_args__ = (
+        CheckConstraint("(user_id IS NULL) <> (guest_token_hash IS NULL)", name="exactly_one_owner"),
+        CheckConstraint(
+            "guest_token_hash IS NULL OR guest_token_hash ~ '^[0-9a-f]{64}$'", name="token_hash_hex"
+        ),
+        CheckConstraint("(user_id IS NULL) = (expires_at IS NOT NULL)", name="only_guest_carts_expire"),
     )
 
-    user: Mapped[Optional["User"]] = relationship("User")
-    items: Mapped[List["CartItem"]] = relationship(
-        "CartItem",
+    # Plain unique constraint (NULLs are distinct in PostgreSQL), so ON CONFLICT (user_id) works.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), unique=True
+    )
+    guest_token_hash: Mapped[str | None] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+    items: Mapped[list["CartItem"]] = relationship(
         back_populates="cart",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        passive_deletes=True,
+        lazy="raise",
+        order_by="(CartItem.created_at, CartItem.id)",
     )
 
 
-class CartItem(Base):
+class CartItem(UUIDPrimaryKey, Timestamps, Base):
     __tablename__ = "cart_items"
     __table_args__ = (
-        UniqueConstraint("cart_id", "product_id", name="uq_cart_product"),
+        UniqueConstraint("cart_id", "product_id"),
+        CheckConstraint(f"quantity BETWEEN 1 AND {MAX_LINE_QUANTITY}", name="quantity_range"),
     )
 
     cart_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("carts.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
+        UUID(as_uuid=True), ForeignKey("carts.id", ondelete="CASCADE"), nullable=False
     )
     product_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("products.id", ondelete="CASCADE"),
-        nullable=False,
+        UUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    variant_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("product_variants.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    unit_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    cart: Mapped["Cart"] = relationship("Cart", back_populates="items")
-    product: Mapped["Product"] = relationship("Product", lazy="selectin")
-    variant: Mapped[Optional["ProductVariant"]] = relationship("ProductVariant")
-
+    cart: Mapped[Cart] = relationship(back_populates="items", lazy="raise")
+    product: Mapped["Product"] = relationship(lazy="raise")

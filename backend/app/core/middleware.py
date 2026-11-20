@@ -1,153 +1,184 @@
-"""
-HTTP Security Headers & Bounded Sliding-Window Rate Limiter (`backend/app/core/middleware.py`).
-Fixes:
-- BUG-11: Removes `'unsafe-inline'` from `script-src` for API responses and dynamically builds
-  `connect-src` from `settings.CORS_ORIGINS` (including `http://localhost:3000`).
-- BUG-12: Replaces unbounded `defaultdict(list)` with a bounded `TTLCache(maxsize=10000, ttl=60)`
-  to prevent memory exhaustion under distributed brute-force traffic.
+"""Security middleware (pure ASGI) and a bounded sliding-window rate limiter.
+
+SecurityMiddleware
+- OWASP headers on every response; JSON API routes get `default-src 'none'`
+  (no 'unsafe-inline'). Only the interactive docs get a relaxed CSP, and docs are
+  disabled in production. HSTS is sent in production only. Responses to requests
+  carrying credentials get `Cache-Control: no-store`.
+- CSRF guard on EVERY unsafe request (POST/PUT/PATCH/DELETE), with or without
+  cookies: login CSRF and guest-cart writes carry no auth cookie yet are still
+  attackable. The request must send `X-Requested-With` (browsers cannot add custom
+  headers cross-site without a CORS preflight, which CORS rejects for unknown
+  origins); an Origin header, if present, must be an allowed origin; and
+  `Sec-Fetch-Site: cross-site` is refused outright. Server-to-server callers
+  (future payment webhooks) need an explicit exemption here.
+
+Rate limiting is per process: with N workers the effective limit is N x max. The
+per-account lockout stored in PostgreSQL is the cross-worker brute-force defense.
 """
 
+import ipaddress
+import json
 import time
-from collections import OrderedDict
-from typing import List, MutableMapping, Tuple
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import Response
-from fastapi import HTTPException, status
+from collections import deque
+from collections.abc import Callable, Coroutine
+from typing import Any
+
+from cachetools import TTLCache
+from fastapi import HTTPException, Request, status
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.config import settings
 
-try:
-    from cachetools import TTLCache  # type: ignore
-    HAS_CACHETOOLS = True
-except ImportError:
-    HAS_CACHETOOLS = False
+CSRF_HEADER = "X-Requested-With"
+SESSION_TOKEN_HEADER = "X-Session-Token"  # noqa: S105 - a header name, not a secret
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+DOCS_PATHS = {"/docs", "/openapi.json", "/docs/oauth2-redirect"}
+API_CSP = "default-src 'none'; frame-ancestors 'none'"
+DOCS_CSP = (
+    "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: https://fastapi.tiangolo.com; frame-ancestors 'none'"
+)
 
 
-class _BoundedTTLCache(MutableMapping[Tuple[str, str], List[float]]):
-    """Fallback bounded LRU+TTL store when `cachetools` is not installed."""
+def security_headers(path: str, *, personal: bool = False) -> list[tuple[bytes, bytes]]:
+    headers = {
+        "content-security-policy": DOCS_CSP if path in DOCS_PATHS else API_CSP,
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "referrer-policy": "no-referrer",
+        "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=()",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+    }
+    if settings.is_production:
+        headers["strict-transport-security"] = "max-age=31536000; includeSubDomains"
+    if personal or path.startswith(f"{settings.API_V1_PREFIX}/auth"):
+        headers["cache-control"] = "no-store"
+    return [(k.encode(), v.encode()) for k, v in headers.items()]
 
-    def __init__(self, maxsize: int = 10000, ttl: int = 60):
-        self.maxsize = maxsize
-        self.ttl = ttl
-        self._data: "OrderedDict[Tuple[str, str], Tuple[float, List[float]]]" = OrderedDict()
 
-    def _evict_expired(self, now: float) -> None:
-        expired_keys = [
-            k for k, (expires_at, _) in self._data.items() if expires_at <= now
-        ]
-        for k in expired_keys:
-            self._data.pop(k, None)
+class SecurityMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+        self.auth_cookies = {settings.ACCESS_COOKIE_NAME, settings.REFRESH_COOKIE_NAME}
+        self.allowed_origins = set(settings.CORS_ORIGINS)
 
-    def __getitem__(self, key: Tuple[str, str]) -> List[float]:
-        now = time.time()
-        if key in self._data:
-            expires_at, val = self._data[key]
-            if expires_at > now:
-                self._data.move_to_end(key)
-                return val
-            del self._data[key]
-        raise KeyError(key)
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-    def __setitem__(self, key: Tuple[str, str], value: List[float]) -> None:
-        now = time.time()
-        self._evict_expired(now)
-        if key in self._data:
-            self._data.move_to_end(key)
-        self._data[key] = (now + self.ttl, value)
-        while len(self._data) > self.maxsize:
-            self._data.popitem(last=False)
+        request = Request(scope)
+        has_auth_cookie = bool(self.auth_cookies & request.cookies.keys())
+        if request.method in UNSAFE_METHODS and not self._same_site_request(request):
+            await self._reject(scope, send)
+            return
 
-    def __delitem__(self, key: Tuple[str, str]) -> None:
-        del self._data[key]
+        personal = has_auth_cookie or SESSION_TOKEN_HEADER.lower() in request.headers
+        extra = security_headers(scope["path"], personal=personal)
 
-    def __iter__(self):
-        return iter(self._data)
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                existing = {k.lower() for k, _ in message.get("headers", [])}
+                message["headers"] = list(message.get("headers", [])) + [
+                    (k, v) for k, v in extra if k not in existing
+                ]
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+    def _same_site_request(self, request: Request) -> bool:
+        if not request.headers.get(CSRF_HEADER):
+            return False
+        if request.headers.get("sec-fetch-site") == "cross-site":
+            return False
+        origin = request.headers.get("origin")
+        return not origin or origin in self.allowed_origins
+
+    async def _reject(self, scope: Scope, send: Send) -> None:
+        body = json.dumps({"detail": "CSRF check failed."}).encode()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status.HTTP_403_FORBIDDEN,
+                "headers": [(b"content-type", b"application/json"), *security_headers(scope["path"])],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+
+
+class SlidingWindowLimiter:
+    """Per-key sliding window. Memory is bounded: least-recent keys are evicted.
+    Not thread-safe: call it only from the event loop (see `rate_limit`)."""
+
+    def __init__(
+        self, *, max_keys: int = 10_000, ttl_seconds: int = 3600, clock: Callable[[], float] = time.monotonic
+    ) -> None:
+        self._hits: TTLCache[str, deque[float]] = TTLCache(maxsize=max_keys, ttl=ttl_seconds, timer=clock)
+        self._clock = clock
 
     def __len__(self) -> int:
-        return len(self._data)
+        return len(self._hits)
+
+    def reset(self) -> None:
+        self._hits.clear()
+
+    def hit(self, key: str, *, max_requests: int, window_seconds: int) -> int | None:
+        """Record a hit. Returns seconds to wait if over the limit, else None."""
+        now = self._clock()
+        hits = self._hits.get(key) or deque()
+        while hits and now - hits[0] >= window_seconds:
+            hits.popleft()
+        if len(hits) >= max_requests:
+            self._hits[key] = hits
+            return max(1, int(window_seconds - (now - hits[0])) + 1)
+        hits.append(now)
+        self._hits[key] = hits
+        return None
 
 
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """
-    OWASP Top 10 Fortified HTTP Security Headers Middleware.
-    """
+limiter = SlidingWindowLimiter()
 
-    async def dispatch(self, request: Request, call_next):
-        response: Response = await call_next(request)
 
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
-        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()"
+def client_ip(request: Request) -> str:
+    """Peer IP, or the right-most untrusted X-Forwarded-For hop when the peer is a
+    configured trusted proxy (clients cannot spoof it otherwise). IPv6 clients are
+    bucketed per /64, since one host typically controls the whole /64."""
+    peer = request.client.host if request.client else "unknown"
+    ip = peer
+    if peer in settings.TRUSTED_PROXY_IPS:
+        hops = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]
+        untrusted = [h for h in hops if h not in settings.TRUSTED_PROXY_IPS]
+        if untrusted:
+            ip = untrusted[-1]
+    try:
+        parsed = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if parsed.version == 6:
+        return str(ipaddress.ip_network(f"{parsed}/64", strict=False))
+    return str(parsed)
 
-        # BUG-11 Fix: Dynamic connect-src from settings.CORS_ORIGINS + no 'unsafe-inline' in script-src on API routes
-        allowed_connect = " ".join(
-            sorted(set(["'self'", "http://localhost:8000", "http://127.0.0.1:8000", *settings.CORS_ORIGINS]))
+
+def rate_limit(
+    name: str, *, max_requests: int, window_seconds: int
+) -> Callable[[Request], Coroutine[Any, Any, None]]:
+    """FastAPI dependency factory: limit `name` per client IP.
+
+    Declared `async` so it runs on the event loop: the limiter's TTLCache is not
+    thread-safe, and sync dependencies run concurrently in a threadpool."""
+
+    async def dependency(request: Request) -> None:
+        retry_after = limiter.hit(
+            f"{name}:{client_ip(request)}", max_requests=max_requests, window_seconds=window_seconds
         )
-        is_docs_route = request.url.path in ("/docs", "/redoc", "/openapi.json")
-        script_src = (
-            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-            if is_docs_route
-            else "script-src 'self'; "
-        )
-
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; "
-            f"{script_src}"
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
-            "font-src 'self' https://fonts.gstatic.com; "
-            "img-src 'self' data: https://images.unsplash.com https://fastapi.tiangolo.com; "
-            f"connect-src {allowed_connect}; "
-            "frame-ancestors 'none';"
-        )
-        return response
-
-
-class RateLimiter:
-    """
-    Bounded Sliding-Window Rate Limiter (BUG-12 Fix).
-    Uses `cachetools.TTLCache(maxsize=10000, ttl=60)` so stale IP keys are automatically
-    evicted and memory usage is strictly bounded.
-    """
-
-    def __init__(self, maxsize: int = 10000, ttl: int = 60):
-        self.maxsize = maxsize
-        self.ttl = ttl
-        if HAS_CACHETOOLS:
-            self._history: MutableMapping[Tuple[str, str], List[float]] = TTLCache(
-                maxsize=maxsize, ttl=ttl
-            )
-        else:
-            self._history = _BoundedTTLCache(maxsize=maxsize, ttl=ttl)
-
-    def check_rate_limit(
-        self,
-        request: Request,
-        endpoint_key: str,
-        max_requests: int = 5,
-        window_seconds: int = 60,
-    ) -> None:
-        client_ip = request.client.host if request.client else "127.0.0.1"
-        now = time.time()
-        key = (client_ip, endpoint_key)
-
-        existing = self._history.get(key, [])
-        valid_timestamps = [t for t in existing if now - t < window_seconds]
-
-        if len(valid_timestamps) >= max_requests:
-            self._history[key] = valid_timestamps
-            retry_after = max(1, int(window_seconds - (now - valid_timestamps[0])) + 1)
+        if retry_after is not None:
             raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Too many attempts. Rate limit exceeded. Please retry in {retry_after} seconds.",
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "Too many requests. Please try again later.",
                 headers={"Retry-After": str(retry_after)},
             )
 
-        valid_timestamps.append(now)
-        self._history[key] = valid_timestamps
-
-
-rate_limiter = RateLimiter(maxsize=10000, ttl=60)
+    return dependency

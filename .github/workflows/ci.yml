@@ -1,0 +1,85 @@
+# Quality gates: every push to main and every PR must pass all of these.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-bookworm
+        env:
+          POSTGRES_USER: ci
+          # Ephemeral CI-only container; override with a repository secret if desired.
+          POSTGRES_PASSWORD: ${{ secrets.CI_DB_PASSWORD || 'ci-throwaway' }}
+          POSTGRES_DB: hardware_store
+          POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=en_US.utf8
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      ENVIRONMENT: test
+      POSTGRES_USER: ci
+      POSTGRES_PASSWORD: ${{ secrets.CI_DB_PASSWORD || 'ci-throwaway' }}
+      POSTGRES_HOST: localhost
+      POSTGRES_DB: hardware_store
+      TEST_DB_LOCALE: en_US.utf8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - run: pip install -r requirements-dev.txt pip-audit
+      - name: Lint
+        run: ruff check app tests alembic
+      - name: Format
+        run: ruff format --check app tests alembic
+      - name: Type check (strict)
+        run: mypy app
+      - name: Tests (unit + integration + concurrency, real PostgreSQL)
+        run: pytest -q
+      - name: Dependency audit
+        run: pip-audit -r requirements.txt
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Type check
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Bundle budget (initial JS <= 200 KB gzip)
+        run: |
+          size=$(cat dist/assets/*.js | gzip -9 | wc -c)
+          echo "JS gzip: $size bytes"
+          test "$size" -le 204800
+      - name: Dependency audit (shipped dependencies)
+        run: npm audit --omit=dev --audit-level=high
