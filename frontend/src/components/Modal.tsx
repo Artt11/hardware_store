@@ -4,12 +4,24 @@ import { X } from 'lucide-react';
 import { cx } from './ui';
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
+const FIELDS = 'input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled])';
+
+/** First form field; else the first action that is not the close button; else anything focusable.
+ * (One comma selector would pick whichever comes first in the DOM, e.g. a toggle above the field.) */
+function initialFocus(panel: HTMLElement): HTMLElement | null {
+  return (
+    panel.querySelector<HTMLElement>(FIELDS) ??
+    panel.querySelector<HTMLElement>('button:not([disabled]):not([data-close])') ??
+    panel.querySelector<HTMLElement>(FOCUSABLE)
+  );
+}
 const EASE_OUT = [0.23, 1, 0.32, 1] as const;
 const EASE_DRAWER = [0.32, 0.72, 0, 1] as const;
 
 /**
  * Accessible dialog / side drawer.
- * - Esc closes; Tab cycles inside; focus returns to the opener; body scroll locked.
+ * - Opens focused on the first form field; Esc closes; Tab cycles inside (and pulls
+ *   escaped focus back in); focus returns to the opener; body scroll locked.
  * - Motion (occasional UI, so standard animation): the drawer slides on an iOS-like
  *   curve; the dialog grows from 0.96 (never from 0) with a strong ease-out.
  *   Both exit symmetrically and become instant under prefers-reduced-motion.
@@ -19,21 +31,29 @@ export function Modal({
 }: { open: boolean; onClose: () => void; title: string; children: ReactNode; side?: boolean; closeLabel: string }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const reduce = useReducedMotion();
+  // Read through a ref: parents pass inline callbacks, and re-running the effect on
+  // every parent render would steal focus back to the first field while typing.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        onClose();
+        onCloseRef.current();
         return;
       }
-      if (e.key !== 'Tab' || !panelRef.current) return;
-      const items = [...panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)];
+      const panel = panelRef.current;
+      if (e.key !== 'Tab' || !panel) return;
+      const items = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)];
       if (items.length === 0) return;
       const first = items[0];
       const last = items[items.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
+      if (!panel.contains(document.activeElement)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && document.activeElement === first) {
         e.preventDefault();
         last.focus();
       } else if (!e.shiftKey && document.activeElement === last) {
@@ -44,13 +64,16 @@ export function Modal({
     document.addEventListener('keydown', onKey);
     const { overflow } = document.body.style;
     document.body.style.overflow = 'hidden';
-    requestAnimationFrame(() => panelRef.current?.querySelector<HTMLElement>('input, select, textarea, button:not([data-close])')?.focus());
+    const frame = requestAnimationFrame(() => {
+      if (panelRef.current) initialFocus(panelRef.current)?.focus();
+    });
     return () => {
+      cancelAnimationFrame(frame);
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = overflow;
       previous?.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   const panelMotion = side
     ? { initial: { x: '100%' }, animate: { x: 0 }, exit: { x: '100%' }, transition: { duration: reduce ? 0 : 0.34, ease: EASE_DRAWER } }

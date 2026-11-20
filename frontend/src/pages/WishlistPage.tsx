@@ -30,9 +30,9 @@ export function WishlistPage({ onSignIn }: { onSignIn: () => void }) {
               </a>
               <div className="min-w-0 flex-1">
                 <a href={href(`/product/${item.slug}`)} className="line-clamp-2 text-sm font-medium text-ink hover:underline">{name(item)}</a>
-                <StockBadge inStock={item.in_stock} available={item.in_stock ? 99 : 0} />
+                <StockBadge inStock={item.in_stock} available={item.available_quantity} />
               </div>
-              <Price value={item.retail_price} className="text-sm" />
+              <Price value={item.price} className="text-sm" />
               <button type="button" onClick={() => void toggle(item.product_id)} aria-label={t('wishlist.remove')}
                 className="grid h-9 w-9 place-items-center rounded-lg hover:bg-black/5">
                 <Heart className="h-4 w-4 fill-ink" aria-hidden />

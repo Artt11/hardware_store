@@ -207,10 +207,14 @@ export interface WishlistItem {
   name_ru: string | null;
   name_en: string | null;
   unit_of_measure: string;
+  /** Viewer's price: wholesale for verified companies when available. */
+  price: Money;
+  pricing_tier: 'retail' | 'wholesale';
   retail_price: Money;
   currency: string;
   image_url: string | null;
   in_stock: boolean;
+  available_quantity: number;
   added_at: string;
 }
 

@@ -4,7 +4,7 @@ import { ApiError, api, errorMessage } from '../api/client';
 import {
   toAmount, type CheckoutPayload, type DeliveryMethod, type OrderDetail, type PaymentMethod, type StockShortage,
 } from '../api/types';
-import { Button, Field, Notice, Price, cx } from '../components/ui';
+import { Button, Field, Notice, Price, Spinner, cx } from '../components/ui';
 import { useI18n } from '../i18n';
 import { href } from '../router';
 import { useAuth } from '../state/auth';
@@ -13,7 +13,21 @@ import { useCart } from '../state/cart';
 const FREE_SHIPPING = 50000;
 const EXPRESS_COST = 2500;
 
+/**
+ * Waits for the session check and the first cart load: rendering earlier showed
+ * "your cart is empty" to customers with items, and fixed the payment default
+ * before we knew whether the visitor is a B2B buyer. Keyed by user so signing in
+ * mid-checkout re-derives the defaults.
+ */
 export function CheckoutPage() {
+  const { t } = useI18n();
+  const { user, ready } = useAuth();
+  const { cart } = useCart();
+  if (!ready || cart === null) return <Spinner label={t('common.loading')} />;
+  return <CheckoutForm key={user?.id ?? 'guest'} />;
+}
+
+function CheckoutForm() {
   const { t, money, city, name } = useI18n();
   const { user } = useAuth();
   const { cart, reload } = useCart();

@@ -23,10 +23,17 @@ export function ProductPage({ slug }: { slug: string }) {
   const [related, setRelated] = useState<ProductSummary[]>([]);
 
   useEffect(() => {
+    // Abort on slug change: a slow response for the previous product must never
+    // overwrite the one the customer navigated to.
+    const controller = new AbortController();
     setState('loading');
-    api<ProductDetail>(`/products/${encodeURIComponent(slug)}`)
+    api<ProductDetail>(`/products/${encodeURIComponent(slug)}`, { signal: controller.signal })
       .then((p) => { setProduct(p); setState('ready'); setQty(1); })
-      .catch((e: unknown) => setState(e instanceof ApiError && e.status === 404 ? 'missing' : 'error'));
+      .catch((e: unknown) => {
+        if (controller.signal.aborted) return;
+        setState(e instanceof ApiError && e.status === 404 ? 'missing' : 'error');
+      });
+    return () => controller.abort();
   }, [slug, sessionKey]);
 
   const categorySlug = product?.category.slug;
