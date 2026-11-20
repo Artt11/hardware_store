@@ -284,3 +284,15 @@ async def test_autocomplete_highlights_in_the_requested_language(
 
     assert body["products"][0]["highlight"].startswith("<mark")
     assert "Hammer" in body["products"][0]["highlight"]
+
+
+async def test_featured_sort_puts_photographed_in_stock_products_first(client: httpx.AsyncClient) -> None:
+    body = await listing(client, sort="featured")
+
+    order = skus(body)
+    assert order[0] == "00003"  # the only product with a photo
+    assert order[-1] == "00004"  # sold out goes last
+
+
+async def test_featured_is_the_default_without_a_query(client: httpx.AsyncClient) -> None:
+    assert skus(await listing(client))[0] == "00003"

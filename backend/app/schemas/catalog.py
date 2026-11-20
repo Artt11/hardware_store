@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-SortOption = Literal["relevance", "price_asc", "price_desc", "name", "newest", "sku"]
+SortOption = Literal["relevance", "featured", "price_asc", "price_desc", "name", "newest", "sku"]
 Lang = Literal["hy", "ru", "en"]
 MAX_PAGE_SIZE = 100
 

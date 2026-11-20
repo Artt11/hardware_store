@@ -130,7 +130,11 @@ def _order_by(query: CatalogQuery) -> list[Any]:
             desc(func.word_similarity(q, Product.name)),
             name,
         ]
+    # Browsing (no query): real photos first, then in stock, then by name.
+    featured = [Product.image_url.is_(None), stock_column() <= 0, name]
     options: dict[str, list[Any]] = {
+        "relevance": featured,
+        "featured": featured,
         "price_asc": [price, name],
         "price_desc": [desc(price), name],
         "newest": [desc(Product.created_at)],
