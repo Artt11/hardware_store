@@ -12,5 +12,8 @@ RUN npm run build
 FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
+# Owned by uid 1001 (the backend `app` user): the shared product-images volume is
+# initialised from this copy and the seed service must be able to update it.
+COPY --from=build --chown=1001:1001 /app/dist/images/products /usr/share/nginx/html/images/products
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=5s --retries=3 CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1

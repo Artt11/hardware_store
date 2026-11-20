@@ -24,6 +24,9 @@ COPY --chown=app:app alembic.ini ./
 COPY --chown=app:app alembic ./alembic
 COPY --chown=app:app app ./app
 COPY --chown=app:app database/Լավնա.xlsx ./database/Լավնա.xlsx
+COPY --chown=app:app database/product_translations.xlsx ./database/product_translations.xlsx
+# Seeder writes extracted product photos here; compose mounts the shared volume on it.
+RUN mkdir -p /app/product-images && chown app:app /app/product-images
 
 USER app
 EXPOSE 8000

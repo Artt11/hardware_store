@@ -73,6 +73,8 @@ services:
   web:
     build: ./frontend
     restart: unless-stopped
+    volumes:
+      - product-images:/usr/share/nginx/html/images/products:ro
     ports:
       - "${WEB_PORT:-8080}:8080"
     depends_on:
@@ -86,7 +88,9 @@ services:
   seed:
     profiles: [seed]
     build: ./backend
-    command: ["python", "-m", "app.seed.run", "--images-dir", "/tmp/product-images"]
+    command: ["python", "-m", "app.seed.run", "--images-dir", "/app/product-images"]
+    volumes:
+      - product-images:/app/product-images
     environment:
       <<: *backend-env
       SEED_DEFAULT_STOCK: ${SEED_DEFAULT_STOCK:-100}
@@ -102,3 +106,4 @@ networks:
 
 volumes:
   pgdata:
+  product-images:  # written by `seed`, served read-only by `web`
