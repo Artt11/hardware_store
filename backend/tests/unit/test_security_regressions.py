@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from app.core.database import get_db_session
-from app.core.middleware import limiter
+from app.core.middleware import CSRF_HEADER, limiter
 from app.main import app
 from app.services.catalog import highlight as highlight_match
 
@@ -55,7 +55,9 @@ class _RecordingSession:
 async def client() -> AsyncIterator[httpx.AsyncClient]:
     limiter.reset()  # the login rate limit is process-wide; isolate from other tests
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", headers={CSRF_HEADER: "suro"}
+    ) as c:
         yield c
     app.dependency_overrides.clear()
 
@@ -78,6 +80,27 @@ async def test_login_never_creates_accounts(client: httpx.AsyncClient) -> None:
 
     assert response.status_code == 401
     assert session.added == []
+
+
+async def test_login_without_csrf_header_is_rejected(client: httpx.AsyncClient) -> None:
+    """Login CSRF (audit H5): a cross-site form could otherwise sign the victim into
+    the attacker's account. No cookie is present yet, and the guard must still apply."""
+    response = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "nobody@example.com", "password": "not-a-real-password"},
+        headers={CSRF_HEADER: ""},
+    )
+    assert response.status_code == 403
+    assert response.json() == {"detail": "CSRF check failed."}
+
+
+async def test_guest_cart_write_without_csrf_header_is_rejected(client: httpx.AsyncClient) -> None:
+    response = await client.put(
+        "/api/v1/cart/items/00000000-0000-0000-0000-000000000000",
+        json={"quantity": 1},
+        headers={CSRF_HEADER: "", "X-Session-Token": "guest-token"},
+    )
+    assert response.status_code == 403
 
 
 # C2 ---------------------------------------------------------------------------

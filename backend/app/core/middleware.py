@@ -5,10 +5,13 @@ SecurityMiddleware
   (no 'unsafe-inline'). Only the interactive docs get a relaxed CSP, and docs are
   disabled in production. HSTS is sent in production only. Responses to requests
   carrying credentials get `Cache-Control: no-store`.
-- CSRF guard for cookie auth: an unsafe request (POST/PUT/PATCH/DELETE) that carries
-  an auth cookie must send `X-Requested-With` (browsers cannot add custom headers
-  cross-site without a CORS preflight, which CORS rejects for unknown origins) and,
-  if an Origin header is present, it must be an allowed origin.
+- CSRF guard on EVERY unsafe request (POST/PUT/PATCH/DELETE), with or without
+  cookies: login CSRF and guest-cart writes carry no auth cookie yet are still
+  attackable. The request must send `X-Requested-With` (browsers cannot add custom
+  headers cross-site without a CORS preflight, which CORS rejects for unknown
+  origins); an Origin header, if present, must be an allowed origin; and
+  `Sec-Fetch-Site: cross-site` is refused outright. Server-to-server callers
+  (future payment webhooks) need an explicit exemption here.
 
 Rate limiting is per process: with N workers the effective limit is N x max. The
 per-account lockout stored in PostgreSQL is the cross-worker brute-force defense.
@@ -69,11 +72,9 @@ class SecurityMiddleware:
 
         request = Request(scope)
         has_auth_cookie = bool(self.auth_cookies & request.cookies.keys())
-        if request.method in UNSAFE_METHODS and has_auth_cookie:
-            origin = request.headers.get("origin")
-            if not request.headers.get(CSRF_HEADER) or (origin and origin not in self.allowed_origins):
-                await self._reject(scope, send)
-                return
+        if request.method in UNSAFE_METHODS and not self._same_site_request(request):
+            await self._reject(scope, send)
+            return
 
         personal = has_auth_cookie or SESSION_TOKEN_HEADER.lower() in request.headers
         extra = security_headers(scope["path"], personal=personal)
@@ -87,6 +88,14 @@ class SecurityMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
+
+    def _same_site_request(self, request: Request) -> bool:
+        if not request.headers.get(CSRF_HEADER):
+            return False
+        if request.headers.get("sec-fetch-site") == "cross-site":
+            return False
+        origin = request.headers.get("origin")
+        return not origin or origin in self.allowed_origins
 
     async def _reject(self, scope: Scope, send: Send) -> None:
         body = json.dumps({"detail": "CSRF check failed."}).encode()

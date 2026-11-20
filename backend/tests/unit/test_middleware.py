@@ -79,8 +79,31 @@ async def test_unsafe_request_from_foreign_origin_is_blocked(client: httpx.Async
     assert response.status_code == 403
 
 
-async def test_unsafe_request_without_cookies_is_not_csrf_checked(client: httpx.AsyncClient) -> None:
-    assert (await client.post("/api/v1/thing")).status_code == 200
+async def test_unsafe_request_without_cookies_still_needs_csrf_header(client: httpx.AsyncClient) -> None:
+    """Login CSRF and guest-cart writes carry no auth cookie, so the guard must not
+    depend on one (audit H5)."""
+    assert (await client.post("/api/v1/thing")).status_code == 403
+    assert (await client.post("/api/v1/thing", headers={CSRF_HEADER: "suro"})).status_code == 200
+
+
+async def test_cookieless_request_from_foreign_origin_is_blocked(client: httpx.AsyncClient) -> None:
+    response = await client.post(
+        "/api/v1/thing", headers={CSRF_HEADER: "suro", "Origin": "https://evil.example"}
+    )
+    assert response.status_code == 403
+
+
+async def test_cross_site_fetch_metadata_is_blocked(client: httpx.AsyncClient) -> None:
+    response = await client.post(
+        "/api/v1/thing", headers={CSRF_HEADER: "suro", "Sec-Fetch-Site": "cross-site"}
+    )
+    assert response.status_code == 403
+
+
+async def test_allowed_origin_passes(client: httpx.AsyncClient) -> None:
+    origin = settings.CORS_ORIGINS[0]
+    response = await client.post("/api/v1/thing", headers={CSRF_HEADER: "suro", "Origin": origin})
+    assert response.status_code == 200
 
 
 async def test_safe_request_with_cookie_is_not_csrf_checked(client: httpx.AsyncClient) -> None:
@@ -89,10 +112,12 @@ async def test_safe_request_with_cookie_is_not_csrf_checked(client: httpx.AsyncC
 
 
 async def test_rate_limit_dependency_returns_429_with_retry_after(client: httpx.AsyncClient) -> None:
-    codes = [(await client.post("/api/v1/limited")).status_code for _ in range(3)]
+    codes = [
+        (await client.post("/api/v1/limited", headers={CSRF_HEADER: "suro"})).status_code for _ in range(3)
+    ]
 
     assert codes == [200, 200, 429]
-    blocked = await client.post("/api/v1/limited")
+    blocked = await client.post("/api/v1/limited", headers={CSRF_HEADER: "suro"})
     assert int(blocked.headers["retry-after"]) >= 1
 
 
