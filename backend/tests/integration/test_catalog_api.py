@@ -266,6 +266,27 @@ async def test_search_finds_russian_and_english_names(
     assert skus(await listing(client, q="hammer")) == ["00003"]
 
 
+async def test_typo_search_works_on_translated_names(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await translate(db_session, "00003", "Молоток 500г", "Hammer 500 g")
+
+    assert "00003" in skus(await listing(client, q="hamer", lang="en"))  # missing letter
+    assert "00003" in skus(await listing(client, q="молотк", lang="ru"))
+
+
+async def test_relevance_ranks_by_the_display_language(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await translate(db_session, "00001", "Шуруп 4x40", "Screw 4x40")
+    await translate(db_session, "00002", "Шуруп длинный 5x60", "Screw, long 5x60")
+    await translate(db_session, "00004", "Отвёртка PH2", "Screwdriver PH2")
+
+    order = skus(await listing(client, q="screwdrivr", lang="en"))
+
+    assert order[0] == "00004"  # closest English name wins despite the typo
+
+
 async def test_name_sort_follows_the_language(client: httpx.AsyncClient, db_session: AsyncSession) -> None:
     await translate(db_session, "00001", "Шуруп 4x40", "Screw 4x40")
     await translate(db_session, "00003", "Молоток 500г", "Hammer 500 g")

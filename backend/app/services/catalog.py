@@ -83,7 +83,10 @@ def search_condition(q: str) -> ColumnElement[bool]:
         Product.name_en.ilike(pattern, escape="\\"),
         Product.sku.ilike(pattern, escape="\\"),
         Product.barcode == q,
+        # Typo tolerance in every language; each column has its own trigram GIN index.
         literal(q).op("<%")(Product.name),
+        literal(q).op("<%")(Product.name_ru),
+        literal(q).op("<%")(Product.name_en),
     )
 
 
@@ -127,7 +130,9 @@ def _order_by(query: CatalogQuery) -> list[Any]:
                 (name.ilike(f"{_escape_like(q)}%", escape="\\"), 1),
                 else_=2,
             ),
-            desc(func.word_similarity(q, Product.name)),
+            # Rank by the name the customer reads; an Armenian query typed on the
+            # Russian/English storefront still scores against the Armenian name.
+            desc(func.greatest(func.word_similarity(q, name), func.word_similarity(q, Product.name))),
             name,
         ]
     # Browsing (no query): real photos first, then in stock, then by name.
