@@ -26,6 +26,11 @@ SEED_DEMO_PASSWORD='choose-12+-chars' .venv/bin/python -m app.seed.run --demo-us
 cd ../frontend && npm ci && npm run dev                # http://localhost:5173
 ```
 
+**Everyday shortcut:** once the database exists and is seeded, `./run.sh` from the repo
+root installs missing dependencies, applies migrations and starts both servers with one
+command (prefixed `[api]` / `[web]` logs; Ctrl+C stops both). Other ports:
+`API_PORT=8001 WEB_PORT=5174 ./run.sh`.
+
 Demo accounts (after `--demo-users`): `demo.customer@suro.am` (retail) and
 `demo.company@suro.am` (verified B2B: wholesale prices, invoice payment, 5,000,000 ֏ credit).
 
