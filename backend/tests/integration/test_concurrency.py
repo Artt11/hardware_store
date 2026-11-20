@@ -13,13 +13,14 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.core.config import settings
-from app.models import Inventory, Order, User, UserSession
+from app.models import Inventory, Order, User, UserSession, WishlistItem
 from app.schemas.commerce import CheckoutRequest
 from app.seed.excel import ProductRow
 from app.seed.run import product_id_for, seed_catalog
 from app.services import auth as auth_service
 from app.services import cart as cart_service
 from app.services import checkout as checkout_service
+from app.services import wishlist as wishlist_service
 from app.services.auth import InvalidCredentials
 
 PRODUCT_A, PRODUCT_B = product_id_for("90001"), product_id_for("90002")
@@ -213,3 +214,37 @@ async def test_simultaneous_refreshes_with_one_token_both_succeed(
         remaining = await db.scalar(select(func.count()).select_from(UserSession))
     assert results == ["ok"] * 4
     assert remaining == 1
+
+
+async def test_parallel_wishlist_adds_cannot_overshoot_the_cap(
+    sessions: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(wishlist_service, "MAX_WISHLIST_ITEMS", 2)
+    skus = [f"9100{i}" for i in range(6)]
+    async with sessions() as db:
+        await seed_catalog(db, [product(s) for s in skus], image_urls={}, default_stock=1)
+        await db.execute(
+            text(
+                "INSERT INTO users (email, password_hash, first_name, last_name) VALUES "
+                "('wish@example.com', 'x', 'W', 'L')"
+            )
+        )
+        await db.commit()
+        user_id = await db.scalar(select(User.id).where(User.email == "wish@example.com"))
+    assert user_id is not None
+
+    async def add(sku: str) -> str:
+        async with sessions() as db:
+            try:
+                await wishlist_service.add_item(db, user_id, product_id_for(sku))
+                return "ok"
+            except wishlist_service.WishlistFull:
+                await db.rollback()
+                return "full"
+
+    results = await asyncio.gather(*(add(s) for s in skus))
+
+    async with sessions() as db:
+        saved = await db.scalar(select(func.count()).select_from(WishlistItem))
+    assert saved == 2
+    assert results.count("ok") == 2

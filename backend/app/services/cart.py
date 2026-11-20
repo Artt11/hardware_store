@@ -21,6 +21,7 @@ from app.schemas.commerce import CartItemView, CartView
 FREE_SHIPPING_THRESHOLD = Decimal("50000.00")
 EXPRESS_SHIPPING_COST = Decimal("2500.00")
 GUEST_CART_LIFETIME = timedelta(days=30)
+PURGE_BATCH = 200  # expired guest carts removed per new guest cart (bounded work per request)
 ZERO = Decimal("0.00")
 
 
@@ -58,6 +59,20 @@ async def find_cart(db: AsyncSession, *, user: User | None, guest_token: str | N
     return None
 
 
+async def purge_expired_guest_carts(db: AsyncSession, *, limit: int = PURGE_BATCH) -> None:
+    """Delete a bounded batch of expired guest carts (lines cascade). Runs whenever a
+    new guest cart is created, so cleanup keeps pace with growth without a cron job.
+    SKIP LOCKED: concurrent requests never wait on each other's purge."""
+    expired = (
+        select(Cart.id)
+        .where(Cart.expires_at <= func.now())
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+        .scalar_subquery()
+    )
+    await db.execute(delete(Cart).where(Cart.id.in_(expired)))
+
+
 async def get_or_create_cart(
     db: AsyncSession, *, user: User | None, guest_token: str | None
 ) -> tuple[Cart, str | None]:
@@ -75,6 +90,7 @@ async def get_or_create_cart(
         cart = await db.scalar(select(Cart).where(Cart.user_id == user.id))
         assert cart is not None
         return cart, None
+    await purge_expired_guest_carts(db)
     token = new_guest_token()
     cart = Cart(guest_token_hash=hash_token(token), expires_at=datetime.now(UTC) + GUEST_CART_LIFETIME)
     db.add(cart)

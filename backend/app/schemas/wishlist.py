@@ -1,5 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -15,10 +16,13 @@ class WishlistItemResponse(BaseModel):
     name_ru: str | None
     name_en: str | None
     unit_of_measure: str
+    price: Decimal = Field(description="Price for the current viewer (wholesale for B2B when available)")
+    pricing_tier: Literal["retail", "wholesale"]
     retail_price: Decimal
     currency: str
     image_url: str | None
     in_stock: bool
+    available_quantity: int
     added_at: datetime
 
 

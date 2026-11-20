@@ -1,6 +1,7 @@
 """Cart, checkout and orders (Phase 3)."""
 
 from collections.abc import AsyncIterator
+from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -15,6 +16,7 @@ from app.main import app
 from app.models import Cart, Inventory, Order, User
 from app.seed.excel import ProductRow
 from app.seed.run import product_id_for, seed_catalog
+from app.services import cart as cart_service
 
 PASSWORD = "Strong-pass-2026"
 SCREW, HAMMER, PAINT = product_id_for("00001"), product_id_for("00002"), product_id_for("00003")
@@ -124,6 +126,19 @@ async def test_guests_never_share_a_cart(client: httpx.AsyncClient) -> None:
     assert mine.json()["item_count"] == 2
     assert anonymous.json()["items"] == []
     assert stranger.json()["items"] == []
+
+
+async def test_new_guest_carts_purge_expired_ones(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    stale = (await add(client, SCREW, 1)).headers[SESSION_TOKEN_HEADER]
+    await db_session.execute(update(Cart).values(expires_at=func.now() - timedelta(days=1)))
+
+    await add(client, HAMMER, 1)  # another visitor's first cart write
+
+    remaining = (await db_session.scalars(select(Cart.guest_token_hash))).all()
+    assert len(remaining) == 1
+    assert cart_service.hash_token(stale) not in remaining
 
 
 async def test_only_the_token_hash_is_stored(client: httpx.AsyncClient, db_session: AsyncSession) -> None:
@@ -344,3 +359,51 @@ async def test_cannot_read_another_users_order(client: httpx.AsyncClient) -> Non
 
 async def test_orders_require_authentication(client: httpx.AsyncClient) -> None:
     assert (await client.get("/api/v1/orders")).status_code == 401
+
+
+# --- Wishlist -----------------------------------------------------------------------
+
+
+async def set_stock(db: AsyncSession, product: Any, quantity: int) -> None:
+    await db.execute(
+        update(Inventory).where(Inventory.product_id == product).values(quantity_on_hand=quantity)
+    )
+
+
+async def test_wishlist_shows_retail_price_and_real_stock(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await sign_up(client)
+    await set_stock(db_session, SCREW, 3)
+
+    body = (await client.post("/api/v1/wishlist", json={"product_id": str(SCREW)})).json()
+
+    item = body["items"][0]
+    assert (item["price"], item["pricing_tier"]) == ("1000.00", "retail")
+    assert item["available_quantity"] == 3
+    assert item["in_stock"] is True
+
+
+async def test_wishlist_shows_wholesale_price_to_verified_companies(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await sign_up(client, company=True)
+    await verify_company(db_session, "0")
+    await client.post("/api/v1/wishlist", json={"product_id": str(SCREW)})
+
+    item = (await client.get("/api/v1/wishlist")).json()["items"][0]
+
+    assert (item["price"], item["pricing_tier"]) == ("800.00", "wholesale")
+    assert item["retail_price"] == "1000.00"
+
+
+async def test_wishlist_sold_out_item_reports_zero_available(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    await sign_up(client)
+    await set_stock(db_session, HAMMER, 0)
+
+    item = (await client.post("/api/v1/wishlist", json={"product_id": str(HAMMER)})).json()["items"][0]
+
+    assert item["available_quantity"] == 0
+    assert item["in_stock"] is False
