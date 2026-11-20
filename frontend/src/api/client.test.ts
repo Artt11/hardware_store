@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, api, cartToken, errorMessage } from './client';
+import { ApiError, api, cartToken, errorMessage, onSessionExpired } from './client';
 
 type Reply = { status: number; body?: unknown; headers?: Record<string, string> };
 
@@ -83,6 +83,50 @@ describe('api', () => {
 
     await expect(api('/orders')).rejects.toMatchObject({ status: 401 });
     expect(calls).toHaveLength(2);
+  });
+
+  it('announces an expired session when the refresh is refused', async () => {
+    const expired = vi.fn();
+    const unsubscribe = onSessionExpired(expired);
+    serve({ status: 401 }, { status: 401, body: { detail: 'Session expired.' } });
+
+    await expect(api('/cart')).rejects.toMatchObject({ status: 401 });
+    unsubscribe();
+
+    expect(expired).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not announce expiry on a network failure during refresh', async () => {
+    const expired = vi.fn();
+    const unsubscribe = onSessionExpired(expired);
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      if (url.endsWith('/auth/refresh')) throw new TypeError('offline');
+      return reply({ status: 401 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api('/cart')).rejects.toMatchObject({ status: 401 });
+    unsubscribe();
+
+    expect(expired).not.toHaveBeenCalled();
+  });
+
+  it('stops notifying after unsubscribe', async () => {
+    const expired = vi.fn();
+    onSessionExpired(expired)();
+    serve({ status: 401 }, { status: 401 });
+
+    await api('/cart').catch(() => undefined);
+
+    expect(expired).not.toHaveBeenCalled();
+  });
+
+  it('refreshes for /auth/me so a returning visitor is recognised after 15 minutes', async () => {
+    serve({ status: 401 }, { status: 200, body: {} }, { status: 200, body: { email: 'a@b.am' } });
+
+    await expect(api('/auth/me')).resolves.toEqual({ email: 'a@b.am' });
+    expect(calls.map((c) => c.url)).toEqual(['/api/v1/auth/me', '/api/v1/auth/refresh', '/api/v1/auth/me']);
   });
 
   it('never tries to refresh for auth endpoints', async () => {

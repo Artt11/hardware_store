@@ -1,5 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ApiError, api, cartToken } from '../api/client';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { ApiError, api, cartToken, onSessionExpired } from '../api/client';
 import type { RegisterPayload, UserProfile } from '../api/types';
 
 interface Auth {
@@ -18,6 +18,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [ready, setReady] = useState(false);
   const [sessionKey, setSessionKey] = useState(0);
+  const signedInRef = useRef(false);
+  signedInRef.current = user !== null;
+
+  // The server refused to refresh (expired, revoked, signed out elsewhere): drop the
+  // signed-in UI at once and reload cart/wishlist as a guest, instead of showing a
+  // "zombie" account whose every request fails.
+  useEffect(
+    () =>
+      onSessionExpired(() => {
+        if (!signedInRef.current) return;
+        setUser(null);
+        setSessionKey((k) => k + 1);
+      }),
+    [],
+  );
 
   useEffect(() => {
     // Cookies are HttpOnly: the only way to know who is signed in is to ask.

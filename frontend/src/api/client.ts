@@ -5,7 +5,9 @@
  *   SameSite session cookies are sent. No token is ever readable from JS.
  * - Every request carries `X-Requested-With`, which the API requires for
  *   cookie-authenticated writes (CSRF guard).
- * - A 401 triggers one shared `/auth/refresh` and a single retry.
+ * - A 401 triggers one shared `/auth/refresh` and a single retry. When the server
+ *   refuses the refresh, `onSessionExpired` listeners run (AuthProvider signs the
+ *   UI out) so the page never keeps showing a signed-in user with dead cookies.
  * - Guest carts: the API issues `X-Session-Token` on the first cart write; we keep
  *   it in localStorage (it identifies a cart, not an account) and send it back.
  */
@@ -83,17 +85,31 @@ async function send(path: string, options: RequestOptions): Promise<Response> {
 }
 
 let refreshing: Promise<boolean> | null = null;
+const expiryListeners = new Set<() => void>();
 
-/** One refresh at a time; concurrent 401s wait for the same attempt. */
+/** Subscribe to "the server refused to refresh this session". Returns an unsubscribe. */
+export function onSessionExpired(listener: () => void): () => void {
+  expiryListeners.add(listener);
+  return () => void expiryListeners.delete(listener);
+}
+
+/** One refresh at a time; concurrent 401s wait for the same attempt (and one notification). */
 export function refreshSession(): Promise<boolean> {
   refreshing ??= send('/auth/refresh', { method: 'POST' })
-    .then((r) => r.ok)
+    .then((r) => {
+      // Only a real refusal ends the session; a network blip must not sign anyone out.
+      if (r.status === 401 || r.status === 403) expiryListeners.forEach((listener) => listener());
+      return r.ok;
+    })
     .catch(() => false)
     .finally(() => {
       refreshing = null;
     });
   return refreshing;
 }
+
+// Requests whose 401 means "wrong credentials" or that manage the session themselves.
+const NO_REFRESH = new Set(['/auth/login', '/auth/register', '/auth/refresh', '/auth/logout']);
 
 async function parse<T>(response: Response): Promise<T> {
   if (response.status === 204) return undefined as T;
@@ -107,7 +123,7 @@ async function parse<T>(response: Response): Promise<T> {
 
 export async function api<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {
   let response = await send(path, options);
-  if (response.status === 401 && !path.startsWith('/auth/')) {
+  if (response.status === 401 && !NO_REFRESH.has(path)) {
     if (await refreshSession()) response = await send(path, options);
   }
   return parse<T>(response);
